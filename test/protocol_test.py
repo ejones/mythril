@@ -1,6 +1,6 @@
 
 from collections import Iterable
-from thrillx.protocol import *
+from mythril.protocol import *
 from nose.tools import *
 
 class Foo (object):
@@ -9,6 +9,7 @@ class Bar (Foo): pass
 class Corge (Bar): pass
 
 def test_protocol():
+    """ test protocol: defaults; types; subtypes; ABCs; updates """
     @protocol
     def run( obj, arg ):
         return 'object: %s' % arg
@@ -46,3 +47,4 @@ def test_protocol():
 
     eq_( run( object(), 'blech' ) + '; ' + run( 'egah', 'qux' ),
          "object: blech; iter: 'egah' (qux)" )
+

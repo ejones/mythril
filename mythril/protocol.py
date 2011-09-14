@@ -1,59 +1,35 @@
 from functools import partial
-from itertools import islice, count
+from itertools import islice, count, chain, imap
 from types import InstanceType
+from operator import itemgetter
 
-_nomatch = object()
+nomatch = object() # sentinel for collections
 
-class DispatchTable( object ):
-    """ Stores values (typically Callables) associated with types. On lookup,
-    it knows how to associate sub-classes with super-classes, values with
-    abstract types, etc.
-    Essentially an internal class, but could be leveraged elsewhere for
-    fast subtype lookup """
-    # TODO: cDispatchTable? After all, monkey C, monkey C++
-    # TODO: Maintain insertion order: to concretely handle possible abstract
-    #           class contentions
-    def __init__( self ):
-        self._table = {}
+def dispatch_values( dtable, typ ):
+    """ Takes a dict of { type: value } and a type, and returns a
+    sequence of (type, value) for all the matching (sub)types & values in the
+    dict """
+    if typ is not InstanceType: 
+        for base in typ.mro()[ :-1 ]: # -1 is object
+             if base in dtable: yield base, dtable[ base ]
+    elif typ in dtable: yield typ, dtable[ typ ]
 
-    __cache = None
-    @property
-    def _cache( self ):
-        if self.__cache is None: self.__cache = {}
-        return self.__cache
-    
-    def __setitem__( self, key, value ): 
-        self.__cache = None
-        self._table[ key ] = value
+    for abase in dtable.iterkeys(): 
+        if issubclass( typ, abase ) and not typ == abase: 
+            yield abase, dtable[ abase ]
+          
+    if object in dtable: yield object, dtable[ object ]
 
-    def get( self, key, default=None ):
-        ret = self._table.get( key, _nomatch )
-        if ret is _nomatch: ret = self._cache.get( key, _nomatch )
-        
-        if ret is not _nomatch: return ret
-
-        if key is not InstanceType:
-            for base in key.mro()[ :-1 ]: # clip ``object`` because that's
-                                          #  silly at this stage
-                ret = self._table.get( base, _nomatch )
-                if ret is not _nomatch: break
-
-        if ret is _nomatch:
-            abases = [ b for b in self._table.iterkeys() if issubclass( key, b ) ]
-            ret = next( (self._table[ b ] for i, b in enumerate( abases )
-                         if not any( issubclass( bsub, b ) 
-                                     for bsub in islice( abases, i + 1, None ))),
-                        _nomatch )
-
-        if ret is _nomatch: ret = self._table.get( object, _nomatch )
-
-        if ret is not _nomatch: self._cache[ key ] = ret; return ret
-        return default
-
-    def __getitem__( self, key ):
-        ret = self.get( key, _nomatch )
-        if ret is _nomatch: raise KeyError( key )
-        return ret
+def dispatch( dtable, typ, default=None ):
+    """ Takes a dict of { type: value } and a type, and returns
+    the most appropriate value, considering base classes and ABCs. 
+    If this is used often you should cache the results. """
+    types_x_vals = list( dispatch_values( dtable, typ ) )
+    for i, (typ, val) in enumerate( types_x_vals ):
+        for bsub, _subval in islice( types_x_vals, i + 1, None ):
+            if issubclass( bsub, typ ): break
+        else: return val
+    return default
 
 class protocol( object ):
     """ Turns a function into a Callable whose behaviour can be customised
@@ -64,18 +40,27 @@ class protocol( object ):
     # TODO: doctest exaples
     # TODO: repr/str based on func.__name__
     def __init__( self, func ): 
-        self.dtable = DispatchTable()
+        self.dtable = {}
+        self.cache = None
         self.of( object )( func )
 
     def of( self, typ ):
         """ Decorator that sets up the function as the specialization of this
         protocol for values of type typ """
-        def dec( func ): self.dtable[ typ ] = func
+        def dec( func ): 
+            self.dtable[ typ ] = func
+            self.cache = None
         return dec
 
     def __call__( self, value, *args, **kwargs ):
-        target = self.dtable.get( type( value ) )
-        if not target: raise ValueError( "'%s' has no handler" % type( value ) )
+        typ = type( value )
+
+        if self.cache is None: self.cache = self.dtable.copy()
+        target = self.cache.get( typ )
+
+        if not target: target = self.cache[ typ ] = dispatch( self.dtable, typ )
+
+        if not target: raise ValueError( "'%s' has no handler" % typ )
         return target( value, *args, **kwargs )
 
 class multicast_protocol( object ):
@@ -85,6 +70,7 @@ class multicast_protocol( object ):
     on the originating value """
     def __init__( self, func ):
         self.dtable = DispatchTable()
+        self.cache = None
         self.of( object )( func )
 
     def of( self, typ ):
@@ -92,10 +78,18 @@ class multicast_protocol( object ):
             listeners = self.dtable.get( typ )
             if listeners is None: listeners = self.dtable[ typ ] = [] 
             listeners.append( func )
+            self.cache = None
         return dec
 
     def __call__( self, value, *args, **kwargs ):
-        listeners = self._dtable.get( type( value ), _nomatch )
-        if listeners is None:
-            raise ValueError( "'%s' has no handlers" % type( value ) )
-        for func in listeners: func( value, *args, **kwargs )
+        typ = type( value )
+
+        if self.cache is None: self.cache = {}
+        funs = self.cache.get( typ )
+
+        if funs is None:
+            funs = self.cache[ typ ] = \
+                list( f for _t, fs in dispatch_values( self.dtable, typ )
+                        for f in fs )
+
+        for fun in funs: fun( value, *args, **kwargs )
