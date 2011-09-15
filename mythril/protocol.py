@@ -1,35 +1,29 @@
-from functools import partial
-from itertools import islice, count, chain, imap
+from itertools import islice, chain
 from types import InstanceType
-from operator import itemgetter
+from operator import add
+from collections import defaultdict
 
 nomatch = object() # sentinel for collections
-
-def dispatch_values( dtable, typ ):
-    """ Takes a dict of { type: value } and a type, and returns a
-    sequence of (type, value) for all the matching (sub)types & values in the
-    dict """
-    if typ is not InstanceType: 
-        for base in typ.mro()[ :-1 ]: # -1 is object
-             if base in dtable: yield base, dtable[ base ]
-    elif typ in dtable: yield typ, dtable[ typ ]
-
-    for abase in dtable.iterkeys(): 
-        if issubclass( typ, abase ) and not typ == abase: 
-            yield abase, dtable[ abase ]
-          
-    if object in dtable: yield object, dtable[ object ]
 
 def dispatch( dtable, typ, default=None ):
     """ Takes a dict of { type: value } and a type, and returns
     the most appropriate value, considering base classes and ABCs. 
     If this is used often you should cache the results. """
-    types_x_vals = list( dispatch_values( dtable, typ ) )
-    for i, (typ, val) in enumerate( types_x_vals ):
-        for bsub, _subval in islice( types_x_vals, i + 1, None ):
-            if issubclass( bsub, typ ): break
-        else: return val
-    return default
+    if typ is not InstanceType:
+        for base in typ.mro()[ :-1 ]: # last is always ``object``
+            if base in dtable: return dtable[ base ]
+
+    # of the keys (types) which are superclasses of this type,
+    #  which is the first one that none of the rest are subclasses of it.
+    abases = [ b for b in dtable.iterkeys() 
+               if b is not object and issubclass( typ, b ) ]
+    ret = next( (dtable[ b ] for i, b in enumerate( abases ) if not any(
+                     issubclass( sb, b ) for sb in islice( abases, i + 1, None ))),
+                nomatch )
+    if ret is not nomatch: return ret
+
+    if object in dtable: return dtable[ object ]
+    else: return default
 
 class protocol( object ):
     """ Turns a function into a Callable whose behaviour can be customised
@@ -69,15 +63,13 @@ class multicast_protocol( object ):
     event, or publisher, in other patterns/langauges, but with specialization
     on the originating value """
     def __init__( self, func ):
-        self.dtable = DispatchTable()
+        self.dtable = defaultdict( list )
         self.cache = None
         self.of( object )( func )
 
     def of( self, typ ):
         def dec( func ):
-            listeners = self.dtable.get( typ )
-            if listeners is None: listeners = self.dtable[ typ ] = [] 
-            listeners.append( func )
+            self.dtable[ typ ].append( func )
             self.cache = None
         return dec
 
@@ -88,8 +80,11 @@ class multicast_protocol( object ):
         funs = self.cache.get( typ )
 
         if funs is None:
+            # each type has zero or more associated handlers, but
+            # need all the handlers for all the (abstract and concrete) base
+            # types for typ (and itself and object)
             funs = self.cache[ typ ] = \
-                list( f for _t, fs in dispatch_values( self.dtable, typ )
-                        for f in fs )
+                reduce( add, (v for b, v in self.dtable.iteritems()
+                              if issubclass( typ, b )), [] )
 
         for fun in funs: fun( value, *args, **kwargs )
