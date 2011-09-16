@@ -15,9 +15,10 @@ the "html" wrapper tag.
 import sys
 from types import NoneType
 from functools import partial
-from itertools import chain, starmap
+from itertools import chain, starmap, imap
 from collections import namedtuple, Callable, Iterable
 from numbers import Number
+from operator import itemgetter
 from cgi import escape as html_escape
 from cStringIO import StringIO
 
@@ -28,57 +29,71 @@ default_lang = 'en'
 
 Attribute = namedtuple( 'Attribute', 'name,value' )
 
-Element = namedtuple( 'Element', 'attrs,children' )
-Element.name = ''
-Element.empty = False
-
-@partial( setattr, Element, '__call__' )
-def __call__( self, *attr_pairs, **attrs ):
-    """ 
-    Element( (attr_name, attr_value), ..., attr_name=attr_value, ...) ->
-    Element( css_class, (attr_name, attr_value), ..., attr_name=attr_value, ...) ->
-    """
-    def correct_attr( name ):
-        if name.endswith( '_' ): name = name[ :-1 ]
-        name = name.replace( '__', ':' ).replace( '_', '-' )
-        return name
+class Element( tuple ):
+    __slots__ = ()
+    name = ''
+    empty = False
+    attrs = property( lambda self: tuple.__getitem__( self, 0 ) )
+    children = property( lambda self: tuple.__getitem__( self, 1 ) )
     
-    if len( attr_pairs ) > 0 and isinstance( attr_pairs[ 0 ], basestring ):
-        attr_pairs = ((u'class', attr_pairs[ 0 ]),) + attr_pairs[ 1: ]
+    def __new__( cls, attrs, children ):
+        return tuple.__new__( cls, (attrs, children) )
 
-    return type( self )( 
-        tuple( chain( starmap( Attribute, attr_pairs ),
-                      (Attribute( correct_attr( name ), value )
-                       for name, value in attrs.iteritems()) ) ),
-        self.children )
-                         
-@partial( setattr, Element, '__getitem__' )
-def __getitem__( self, arg ):
-    """
-    Element[ child1, child2, ... childN ]
-    """
-    if not isinstance( arg, tuple ): arg = (arg,)
-    return type( self )( self.attrs, arg )
+    def __repr__( self ):
+        ret = self.name or type( self ).__name__
+        if self.attrs: 
+            ret += '(' + ', '.join( repr( tuple( a ) ) for a in self.attrs ) + ')'
+        if self.children:
+            ret += '[' +  ', '.join( imap( repr, self.children ) ) + ']'
+        return ret
 
-@partial( setattr, Element, 'register' )
-@classmethod
-def register( cls, name, empty=False ):
-    """
-    Registers the given name as an html tag. A subtype of the current type 
-    (e.g., `Element`) is added to its module as well as a root instance that 
-    must be used to construct the tags of that type. If ``name`` is "article",
-    for instance, a subtype named "ArticleType", and a builder instance named
-    "article", would be added to the current type's module (e.g., `mythril.html`)
+    def __getnewargs__( self ): return tuple( self )
 
-    Please give the name in ``unicode``.
-    """
-    mod = sys.modules[ cls.__module__ ]
-    etype_name = name.title() + 'Type'
-    etype = type( cls )( (etype_name if isinstance( etype_name, str )
-                          else etype_name.encode( 'ascii' )),
-                          (cls,), { 'name': name, 'empty': empty } )
-    setattr( mod, etype_name, etype )
-    setattr( mod, name, etype( attrs=(), children=() ) )
+
+    def __call__( self, *attr_pairs, **attrs ):
+        """ 
+        Element( (attr_name, attr_value), ..., attr_name=attr_value, ...) ->
+        Element( css_class, (attr_name, attr_value), ..., attr_name=attr_value, ...) ->
+        """
+        def correct_attr( name ):
+            if name.endswith( '_' ): name = name[ :-1 ]
+            name = name.replace( '__', ':' ).replace( '_', '-' )
+            return name
+        
+        if len( attr_pairs ) > 0 and isinstance( attr_pairs[ 0 ], basestring ):
+            attr_pairs = ((u'class', attr_pairs[ 0 ]),) + attr_pairs[ 1: ]
+
+        return type( self )( 
+            tuple( chain( starmap( Attribute, attr_pairs ),
+                          (Attribute( correct_attr( name ), value )
+                           for name, value in attrs.iteritems()) ) ),
+            self.children )
+                                 
+    def __getitem__( self, arg ):
+        """
+        Element[ child1, child2, ... childN ]
+        """
+        if not isinstance( arg, tuple ): arg = (arg,)
+        return type( self )( self.attrs, arg )
+
+    @classmethod
+    def register( cls, name, empty=False ):
+        """
+        Registers the given name as an html tag. A subtype of the current type 
+        (e.g., `Element`) is added to its module as well as a root instance that 
+        must be used to construct the tags of that type. If ``name`` is "article",
+        for instance, a subtype named "ArticleType", and a builder instance named
+        "article", would be added to the current type's module (e.g., `mythril.html`)
+
+        Please give the name in ``unicode``.
+        """
+        mod = sys.modules[ cls.__module__ ]
+        etype_name = name.title() + 'Type'
+        etype = type( cls )( (etype_name if isinstance( etype_name, str )
+                              else etype_name.encode( 'ascii' )),
+                              (cls,), { 'name': name, 'empty': empty } )
+        setattr( mod, etype_name, etype )
+        setattr( mod, name, etype( attrs=(), children=() ) )
 
 map( Element.register, u'''
     a abbr acronym address applet b bdo big blockquote body button
@@ -117,16 +132,27 @@ class safe_unicode(unicode):
 class Page( tuple ):
     """ Useful wrapper for the usual features of a full HTML document """
     __slots__ = ()
+    title = property( itemgetter( 0 ) )
+    content = property( itemgetter( 1 ) )
+    encoding = property( itemgetter( 2 ) )
+    lang = property( itemgetter( 3 ) )
+
     def __new__( cls, title, content, encoding=None, lang=None ):
         encoding = encoding or default_encoding
         lang = lang or default_lang
         return tuple.__new__( cls, (title, content, encoding, lang) )
-        
+
     def __getnewargs__( self ): return tuple( self )
     def __repr__( self ):
         return 'Page(title=%r, content=%r, encoding=%r, lang=%r)' % self
-    def __str__( self ): return repr( self )
+
+    def write_to( self, out ):
+        """ Convenience for `html_write` since we already have the encoding """
+        return html_write( self, out, self.encoding )
         
+    def to_bytes( self ):
+        """ Convenience for `html_bytes` since we already have the encoding """
+        return html_bytes( self, self.encoding )
 
 @protocol
 def html_write( obj, out, encoding ):
@@ -204,13 +230,14 @@ html_write.of( StyleType )( __write_script_and_style )
                 
 @html_write.of( DocType )
 def _( elem, out, enc ):
-    html_write( (u'<!DOCTYPE html>', HtmlType( self.attrs, self.children )),
+    html_write( (safe_unicode( u'<!DOCTYPE html>' ), 
+                 HtmlType( elem.attrs, elem.children )),
                 out, enc )
 
 @html_write.of( Page )
 def _( pg, out, enc ):
     html_write( doc( lang='en' )[
-        head[ meta( http_equiv=u'Content-Type', 
-                    content=u'text/html;charset=' + pg.encoding ),
+        head[ meta( (u'http-equiv', u'Content-Type'),
+                    (u'content', u'text/html;charset=' + pg.encoding) ),
               title[ pg.title ] ],
         body[ pg.content ] ], out, enc )
