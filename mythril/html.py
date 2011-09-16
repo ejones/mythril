@@ -12,7 +12,7 @@ HTML. Just define a function decorated with
 "html" tag in this module. The "doc" tag handles adding the doctype *and*
 the "html" wrapper tag.
 """
-
+import sys
 from types import NoneType
 from functools import partial
 from itertools import chain, starmap
@@ -22,6 +22,9 @@ from cgi import escape as html_escape
 from cStringIO import StringIO
 
 from mythril.protocol import protocol
+
+default_encoding = 'UTF-8'
+default_lang = 'en'
 
 Attribute = namedtuple( 'Attribute', 'name,value' )
 
@@ -66,13 +69,16 @@ def register( cls, name, empty=False ):
     must be used to construct the tags of that type. If ``name`` is "article",
     for instance, a subtype named "ArticleType", and a builder instance named
     "article", would be added to the current type's module (e.g., `mythril.html`)
+
+    Please give the name in ``unicode``.
     """
-    mod = cls.__module__
+    mod = sys.modules[ cls.__module__ ]
     etype_name = name.title() + 'Type'
-    etype = type( cls )( etype_name, (cls,), { 
-                            'name': name, 'empty': empty } )
+    etype = type( cls )( (etype_name if isinstance( etype_name, str )
+                          else etype_name.encode( 'ascii' )),
+                          (cls,), { 'name': name, 'empty': empty } )
     setattr( mod, etype_name, etype )
-    setattr( mod, name, etype( (), () ) )
+    setattr( mod, name, etype( attrs=(), children=() ) )
 
 map( Element.register, u'''
     a abbr acronym address applet b bdo big blockquote body button
@@ -108,58 +114,103 @@ class safe_unicode(unicode):
         return (safe_unicode(res)
                 if isinstance(o, (safe_unicode, safe_bytes)) else res)
                 
-@protocol
-def html_write( obj, out, in_encoding ):
-    """ ``protocol`` that writes the html representation of ``obj`` to
-    the the file-like (writable) object ``out``. Any ``str``s are 
-    decoded according to ``in_encoding`` """
-    # default handler
-    html_write( repr( obj ), out, in_encoding )
+class Page( tuple ):
+    """ Useful wrapper for the usual features of a full HTML document """
+    __slots__ = ()
+    def __new__( cls, title, content, encoding=None, lang=None ):
+        encoding = encoding or default_encoding
+        lang = lang or default_lang
+        return tuple.__new__( cls, (title, content, encoding, lang) )
+        
+    def __getnewargs__( self ): return tuple( self )
+    def __repr__( self ):
+        return 'Page(title=%r, content=%r, encoding=%r, lang=%r)' % self
+    def __str__( self ): return repr( self )
+        
 
-def html_string( value, in_encoding )
+@protocol
+def html_write( obj, out, encoding ):
+    """ ``protocol`` that writes the html representation of ``obj`` to
+    the the file-like (writable) object ``out``. Any ``str``s that need to
+    be HTML-escaped are decoded according to ``encoding``. Only bytes are 
+    written to the output file (as ``str``s encoded by ``encoding``).
+
+    If you expect to have ``str``s in your app encoded to a different
+    encoding than the one you are using here, remember to unicode them
+    in advance """
+    # default handler
+    html_write( repr( obj ), out, encoding )
+
+def html_bytes( value, encoding=None ):
     """ Convenience """
-    s = StringIO(); html_write( value, s, in_encoding )
+    encoding = encoding or default_encoding
+    s = StringIO(); html_write( value, s, encoding )
     return s.getvalue()
 
 @html_write.of( str )
-def _( s, out, in_enc ):
-    out.write( html_escape( unicode( s, in_enc, 'strict' ), True ) )
+def _( s, out, enc ):
+    out.write( html_escape( unicode( s, enc, 'strict' ), True )
+                    .encode( enc, 'strict' ) )
 
 @html_write.of( unicode )
-def _( s, out, in_enc ): out.write( html_escape( s, True ) )
+def _( s, out, enc ): out.write( html_escape( s, True ).encode( enc, 'strict' ) )
 
 @html_write.of( safe_bytes )
-def _( s, out, in_enc ): out.write( unicode( s, in_enc, 'strict' ) )
+def _( s, out, enc ): out.write( s )
 
 @html_write.of( safe_unicode )
-def _( s, out, in_enc ): out.write( s )
+def _( s, out, enc ): out.write( s.encode( enc, 'strict' ) )
 
 @html_write.of( NoneType )
-def _( n, out, in_enc ): pass
+def _( n, out, enc ): pass
 
 @html_write.of( bool )
-def _( b, out, in_enc ): out.write( unicode( b ) )
+def _( b, out, enc ): out.write( unicode( b ).encode( enc, 'strict' ) )
 
 @html_write.of( Number )
-def _( num, out, in_enc ): out.write( unicode( num ) )
+def _( num, out, enc ): out.write( unicode( num ).encode( enc, 'strict' ) )
 
 @html_write.of( Callable )
-def _( f, out, in_enc ): html_write( f(), out, in_enc )
+def _( f, out, enc ): html_write( f(), out, enc )
 
 @html_write.of( Iterable )
-def _( seq, out, in_enc ):
-    for x in seq: html_write( x, out, in_enc )
+def _( seq, out, enc ):
+    for x in seq: html_write( x, out, enc )
 
 @html_write.of( Attribute )
-def _( attr, out, in_enc ):
-    html_write( (u' ', attr.name, u'="', attr.value, u'"'), out, in_enc )
+def _( attr, out, enc ):
+    html_write( (safe_unicode( u' ' ), attr.name, 
+                 safe_unicode( u'="' ), attr.value, safe_unicode( u'"' )), 
+                out, enc )
 
 @html_write.of( Element )
-def _( elem, out, in_enc ):
-    out.write( u'<' + elem.name )
-    for a in elem.attrs: html_write( a, out, in_enc )
-    out.write( u'>' )
-    if not elem.empty:
-        for c in elem.children: html_write( c, out, in_enc )
-        out.write( u'</' + elem.name + u'>' )
+def _( elem, out, enc ):
+    html_write( (safe_unicode( u'<' ), elem.name, elem.attrs, safe_unicode( u'>' )),
+                out, enc )
+    if not elem.empty: 
+        html_write( (elem.children, safe_unicode( u'</' ),
+                     elem.name, safe_unicode( u'>' )), out, enc )
 
+def __write_script_and_style( elem, out, enc ):
+    html_write( (safe_unicode( u'<' ), elem.name, elem.attrs, safe_unicode( u'>' )),
+                out, enc )
+    for s in elem.children:
+        if isinstance( s, str ): out.write( s )
+        else: out.write( s.encode( enc, 'strict' ) )
+    html_write( (safe_unicode( u'</' ), elem.name, safe_unicode( u'>' )), out, enc )
+        
+html_write.of( ScriptType )( __write_script_and_style )
+html_write.of( StyleType )( __write_script_and_style )
+                
+@html_write.of( DocType )
+def _( elem, out, enc ):
+    html_write( (u'<!DOCTYPE html>', HtmlType( self.attrs, self.children )),
+                out, enc )
+
+@html_write.of( Page )
+def _( pg, out, enc ):
+    html_write( doc( lang='en' )[
+        head[ meta( http_equiv=u'Content-Type', 
+                    content=u'text/html;charset=' + pg.encoding ),
+              title[ pg.title ] ],
+        body[ pg.content ] ], out, enc )
