@@ -2,6 +2,17 @@
 from nose.tools import *
 from mythril.html import *
 
+class CamelCasedName: pass
+class CamelC4se3Name( object ): pass
+def some_func_name(): pass
+
+def test_cssid():
+    eq_( Element.cssid( 'foo-bar' ), 'foo-bar' )
+    eq_( Element.cssid( CamelCasedName ), 'camel-cased-name' )
+    eq_( Element.cssid( some_func_name ), 'some-func-name' )
+    eq_( Element.cssid( (CamelCasedName, (CamelC4se3Name, some_func_name), 'foo') ),
+            ('camel-cased-name', ('camel-c4se3-name', 'some-func-name'), 'foo') )
+    
 def test_html():
     eq_( html_bytes([ 'a', 'b', u'c', ('d', u'e'), 
                       set([ 'f', 'f' ]), 4, 4.5,
