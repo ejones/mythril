@@ -27,8 +27,13 @@ from operator import itemgetter
 from cgi import escape as html_escape
 from cStringIO import StringIO
 
+try: import simplejson as json
+except ImportError: import json # should this be the other way around?
+
 from mythril.protocol import protocol
-from mythril.collections import TupleMeta
+from mythril.util import customtuple
+
+noarg = object()
 
 default_encoding = 'UTF-8'
 default_lang = 'en'
@@ -49,8 +54,7 @@ def from_args( args=(), kwargs={} ):
 
 # NB: can't use namedtuple here because its constructor seems to call
 #  __getitem__, which ends up messing with the cosmos
-class Element( tuple ):
-    __metaclass__ = TupleMeta
+class Element( customtuple ):
     name = ''
     empty = False
     
@@ -150,10 +154,8 @@ class safe_unicode(unicode):
         return (safe_unicode(res)
                 if isinstance(o, (safe_unicode, safe_bytes)) else res)
                 
-class Page( tuple ):
+class Page( customtuple ):
     """ Useful wrapper for the usual features of a full HTML document """
-    __metaclass__ = TupleMeta
-
     def __new__( cls, title, content, encoding=None, lang=None ):
         encoding = encoding or default_encoding
         lang = lang or default_lang
@@ -168,46 +170,40 @@ class Page( tuple ):
         encoding """
         return HtmlWriter.to_bytes( self, self.encoding )
 
-class Resource( tuple ):
+class Resource( customtuple ):
     """ Describes a part of an HTML document that must appear at a specific 
     location (e.g., in the ``<head>`` or at the end) and, if given a 
     unique key, only once per unique key. """
-    __metaclass__ = TupleMeta
     def __new__( cls, section, content, key=None ):
         return tuple.__new__( cls, (section, content, key or object()) )
 
-class Include( tuple ):
+class Include( customtuple ):
     """ Marks its location in the doucment as the point for inclusion of
     the corresponding `Resource` elements """
-    __metaclass__ = TupleMeta
     def __new__( cls, section ):
         return tuple.__new__( cls, (section,) )
 
-class CSSFile( tuple ):
+class CSSFile( customtuple ):
     """ Represents a `Resource` of a single CSS file. Resource section name is
     'css_files' """
-    __metaclass__ = TupleMeta
     def __new__( cls, url, key=None ):
         return tuple.__new__( cls, (url, key or object()) )
         
-class JSFile( tuple ):
+class JSFile( customtuple ):
     """ Represents a `Resource` of a single JS file. Resource section name is
     'js_files' """
-    __metaclass__ = TupleMeta
     def __new__( cls, url, key=None ):
         return tuple.__new__( cls, (url, key or object()) )
 
-class StyleResource( tuple ):
+class StyleResource( customtuple ):
     """ A `Resource` for inline CSS rules. The ``<style>`` tag is added
     automatically. Resource section name is 'css' """
-    __metaclass__ = TupleMeta
     def __new__( cls, content, key=None ):
         return tuple.__new__( cls, (content, key or object()) )
 
-class ScriptResource( tuple ):
+class ScriptResource( customtuple ):
     """ A `Resource` for inline JS code. The ``<script>`` tag is added
     automatically. Resource section name is 'js' """
-    __metaclass__ = TupleMeta
     def __new__( cls, content, key=None ):
         return tuple.__new__( cls, (content, key or object()) )
 
@@ -217,14 +213,14 @@ class HtmlWriterBlock( list ):
     def __init__( self, section, *args, **kwargs ): 
         self.followed_by = None
         self.section = section
-        list.__init__( *args, **kwargs )
+        list.__init__( self, *args, **kwargs )
 
 class HtmlWriterSection( list ):
     """ Internal use for `HtmlWriter` """
     __slots__ = ('seen_keys')
     def __init__( self, *args, **kwargs ): 
         self.seen_keys = set()
-        list.__init__( *args, **kwargs )
+        list.__init__( self, *args, **kwargs )
 
 class HtmlWriter( object ):
     """ Writes arbitrary Python values into HTML. ``HtmlWriter.writer_of``
@@ -259,17 +255,19 @@ class HtmlWriter( object ):
         self.stack.pop()
         return self
         
-    def getvalue( self ):
+    def getvalue( self, section=noarg ):
         """ Concats all the seen data into a single buffer """
-        s = StringIO()
-        def write( section_name ):
-            section = self.sections.get( section_name )
-            if section:
-                for block in section:
-                    for data in block: s.write( data )
-                    if block.followed_by is not None: write( block.followed_by )
-        write( None )
+        s = StringIO(); self.write_section( None, s )
         return s.getvalue()
+
+    def write_section( self, section_name, file ):
+        """ Internal. """
+        section = self.sections.get( section_name )
+        if section:
+            for block in section:
+                for data in block: file.write( data )
+                if block.followed_by is not None: 
+                    self.write_section( block.followed_by, file )
 
     @classmethod
     def write_of( cls, type ):
@@ -278,7 +276,7 @@ class HtmlWriter( object ):
         )``. The function should take the ``HtmlWriter`` as the *first*
         argument and the value (of your type) as the *second*. """
         return lambda func: \
-            cls._prototype.of( type )( lambda val, self: func( self, val ) )
+            cls._protocol.of( type )( lambda val, self: func( self, val ) )
         
     @classmethod
     def to_bytes( cls, value, encoding=None ):
@@ -290,26 +288,27 @@ class HtmlWriter( object ):
 @HtmlWriter.write_of( str )
 def _( wr, s ):
     wr.current.append( 
-        html_escape( unicode( s, enc, 'strict' ), True ).encode( enc, 'strict' ) )
+        html_escape( unicode( s, wr.encoding, 'strict' ), True )
+            .encode( wr.encoding, 'strict' ) )
 
 @HtmlWriter.write_of( unicode )
 def _( wr, s ): 
-    wr.current.append( html_escape( s, True ).encode( enc, 'strict' ) )
+    wr.current.append( html_escape( s, True ).encode( wr.encoding, 'strict' ) )
 
 @HtmlWriter.write_of( safe_bytes )
 def _( wr, s ): wr.current.append( s )
 
 @HtmlWriter.write_of( safe_unicode )
-def _( wr, s ): wr.current.append( s.encode( enc, 'strict' ) )
+def _( wr, s ): wr.current.append( s.encode( wr.encoding, 'strict' ) )
 
 @HtmlWriter.write_of( NoneType )
 def _( wr, non ): pass
 
 @HtmlWriter.write_of( bool )
-def _( wr, b ): wr.current.append( unicode( b ).encode( enc, 'strict' ) )
+def _( wr, b ): wr.current.append( unicode( b ).encode( wr.encoding, 'strict' ) )
 
 @HtmlWriter.write_of( Number )
-def _( wr, num ): wr.current.append( unicode( num ).encode( enc, 'strict' ) )
+def _( wr, num ): wr.current.append( unicode( num ).encode( wr.encoding, 'strict' ) )
 
 @HtmlWriter.write_of( Callable )
 def _( wr, f ): wr.write( f() )
@@ -332,7 +331,7 @@ def _( wr, res ):
     wr.write( res.content )
     wr.current = old
 
-@HtmlWriter.write_of( Include ):
+@HtmlWriter.write_of( Include )
 def _( wr, inc ):
     wr.current.followed_by = inc.section
     sec = wr.current.section
@@ -355,8 +354,8 @@ HtmlWriter.write_of( Element )( __write_element )
 def __write_script_and_style( wr, elem ):
     wr.write( (safe_unicode( u'<' ), elem.name, elem.attrs, safe_unicode( u'>' )) )
     for s in elem.children:
-        if isinstance( s, str ): wr.body.write( s )
-        elif isinstance( s, unicode ): wr.body.write( s.encode( enc, 'strict' ) )
+        if isinstance( s, str ): wr.current.append( s )
+        elif isinstance( s, unicode ): wr.current.append( s.encode( enc, 'strict' ) )
         else: raise ValueError( 
                 'script/style tag: unknown type ' + type( s ).__name__ )
                         
@@ -370,25 +369,26 @@ def _( wr, elem ):
     wr.write( (safe_unicode( u'<!DOCTYPE html>' ), 
                  HtmlType( elem.attrs, elem.children )) )
 
-@HtmlWriter.write_of( CSSFile ):
+@HtmlWriter.write_of( CSSFile )
 def _( wr, cssf ):
     wr.write( Resource( 'css_files', key=cssf.key,
-                        content=link( rel='stylesheet', type='text/css',
+                        content=link( (u'rel', u'stylesheet'), 
+                                      (u'type', u'text/css'),
                                       href=cssf.url )))
 
-@HtmlWriter.write_of( JSFile ):
+@HtmlWriter.write_of( JSFile )
 def _( wr, jsf ):
     wr.write( Resource( 'js_files', key=jsf.key,
-                        content=script( type='text/javascript', src=jsf.url )))
+                        content=script( (u'type', u'text/javascript'), src=jsf.url )))
 
-@HtmlWriter.write_of( StyleResource ):
+@HtmlWriter.write_of( StyleResource )
 def _( wr, styl ):
     c = styl.content
     wr.write( Resource( 'css', key=styl.key,
                         content=( safe_unicode( c ) if isinstance( c, unicode )
                                   else safe_bytes( c ) )))
 
-@HtmlWriter.write_of( ScriptResource ):
+@HtmlWriter.write_of( ScriptResource )
 def _( wr, styl ):
     c = styl.content
     wr.write( Resource( 'js', key=styl.key,
@@ -397,13 +397,49 @@ def _( wr, styl ):
 
 @HtmlWriter.write_of( Page )
 def _( wr, pg ):
-    wr.write( doc( pg.lang )[
+    wr.write( doc( lang=pg.lang )[
         head[ meta( (u'http-equiv', u'Content-Type'),
                     (u'content', u'text/html;charset=' + pg.encoding) ),
               title[ pg.title ],
               Include( 'css_files' ),
-              style( type='text/css' )[ Include( 'css' ) ]],
+              safe_unicode( u'<style type="text/css">'),
+              Include( 'css' ),
+              safe_unicode( u'</style>' ) ], # TODO: check if there actually
+                                             #  is any CSS (also for JS below)
         body[ pg.content,
               Include( 'js_files' ),
-              script( type='text/javascript' )[ Include( 'js' ) ]]])
+              safe_unicode( u'<script type="text/javascript">' ),
+              Include( 'js' ),
+              safe_unicode( u'</script>' )]] )
 
+def js_injection( lvalue, content, encoding=None ):
+    """ Utility for injecting content into a running Page.  In JavaScript,
+    assigns an object of ``{ content: "<HTML string>", init: <JS function> }``
+    to ``lvalue``. Renders ``content`` and includes css & js resources, files
+    included. Custom `Resource` types would have to be `Include`d separately
+    """
+    encoding = encoding or default_encoding
+    wr = HtmlWriter( encoding )
+    bcontent = wr.write( (content, Include( 'js_files' )) ).getvalue()
+    
+    def get_section_value( section_name ):
+        s = StringIO(); wr.write_section( section_name, s );
+        return s.getvalue()
+        
+    css_files = get_section_value( 'css_files' )
+    css = get_section_value( 'css' )
+    js = get_section_value( 'js' )
+
+    binject = css_files
+    if css: 
+        binject += u'<style type="text/css">'.encode( encoding, 'strict' )
+        binject += css
+        binject += u'</style>'.encode( encoding, 'strict' )
+    binject += bcontent
+    inject_html = unicode( binject, encoding, 'strict' )
+
+    if isinstance( lvalue, unicode ): lvalue = lvalue.encode( encoding, 'strict' )
+    return ''.join( (lvalue, u'={content:'.encode( encoding, 'strict' ),
+                     json.dumps( inject_html ).encode( encoding, 'strict' ),
+                     u',init:function(){'.encode( encoding, 'strict' ),
+                     js, u'}}'.encode( encoding, 'strict' )) )
