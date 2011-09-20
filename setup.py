@@ -12,5 +12,5 @@ setup(
     license='MIT',
     description='Lightweight library for transforming data and content',
     long_description=open( 'README.rst' ).read(),
-    requires=[ 'simplejson' ],
-    install_requires=[ 'simplejson >= 2.1.0' ])
+    requires=[ 'simplejson', 'pil' ],
+    install_requires=[ 'simplejson >= 2.1.0', 'pil >= 1.1.6' ])

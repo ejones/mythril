@@ -217,16 +217,20 @@ class HtmlWriterBlock( list ):
 
 class HtmlWriterSection( list ):
     """ Internal use for `HtmlWriter` """
-    __slots__ = ('seen_keys')
+    __slots__ = ('seen_keys',)
     def __init__( self, *args, **kwargs ): 
         self.seen_keys = set()
         list.__init__( self, *args, **kwargs )
 
 class HtmlWriter( object ):
-    """ Writes arbitrary Python values into HTML. ``HtmlWriter.writer_of``
+    """ Writes arbitrary Python values into HTML. ``HtmlWriter.write_of``
     allows for the extension of this facility to new types. See
     ``HtmlWriter.to_bytes`` for a convenience method for writing a bunch of
     stuff into HTML in one go (this should be the primary high-level use). 
+    
+    For escaping, ``str`` instances are decoded according to its ``encoding``.
+    Before being written, all ``unicode`` instances are encoded, again, using
+    its ``encoding`` attribute.
     
     Additionally, it is designed to support writing keyed "resources" to specific
     locations in the document (mostly, CSS and JS includes) this allows these
@@ -249,7 +253,7 @@ class HtmlWriter( object ):
     def write( self, value ):
         """ Writes the arbitrary Python value ``value`` as HTML to the internal
         file [sections], This facility can be extended with
-        ``HtmlWriter.writer_of`` """
+        ``HtmlWriter.write_of`` """
         self.stack.append( value )
         self._protocol( value, self )
         self.stack.pop()
