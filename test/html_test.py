@@ -14,7 +14,7 @@ def test_cssid():
             ('camel-cased-name', ('camel-c4se3-name', 'some-func-name'), 'foo') )
     
 def test_html():
-    eq_( HtmlWriter.to_bytes(
+    eq_( html_bytes(
             [ 'a', 'b', u'c', ('d', u'e'), 
               set([ 'f', 'f' ]), 4, 4.5,
               (i*2 for i in xrange(5)) ],
@@ -47,7 +47,7 @@ def test_html():
          '<style type="text/css">body:after { content: \'&\'; }</style>'
          '<script type="text/javascript"></script></body></html>' )
 
-    eq_( HtmlWriter.to_bytes((
+    eq_( html_bytes((
             span[ "before css files" ],
             Include( 'css_files' ),
             span[ "before css" ],

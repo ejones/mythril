@@ -12,10 +12,10 @@ Corresponds to something equivalent to::
     my-class some-class, my-class some-utility { 
          position: relative; top: 1px; left: 0px; }
 
-The `CssWriter` in this module is responsible for writing values to CSS. It is
-recommended that you separately write your CSS into a static file (i.e, at app
-startup), rather than regenerating it on every request. Nonetheless, anything
-is doable.
+The functions `css_bytes` and `css_write` in this module are responsible for
+writing values to CSS. It is recommended that you separately write your CSS
+into a static file (i.e, at app startup), rather than regenerating it on every
+request.  Nonetheless, anything is doable.
 
 ``CssType.special`` is a dict that contains the definitions for, and allows you
 to extend, special property names like "pos", "size". See `CssType`.
@@ -34,6 +34,85 @@ from mythril.util import customtuple
 
 default_encoding = mythril.html.default_encoding
 
+class CssWriter( object ):
+    """ Writes arbitrary Python values to CSS. For advanced use. See
+    `css_bytes` or `css_write` in this module for a simple way of converting to
+    the CSS byte representation. Any arbitrary Python type can support/extend
+    conversion to CSS by implementing a ``__css__`` method that takes the
+    `CssWriter` instance as a sole argument.
+    
+    Before being written, all ``unicode`` instances are encoded using 
+    its ``encoding`` attribute. 
+
+    Note: at the moment, input strings are not "validated" because data-driven
+    CSS is pretty rare. If you plan on using user-submitted css rules/property
+    values, be sure to validate them ... somehow.
+    """
+    def __init__( self, file, encoding=None ):
+        self.encoding = encoding or default_encoding
+        self.file = file
+        self.stack = []
+
+    def write( self, value ):
+        """ Translates the arbitrary Python ``value`` into CSS. """
+        self.stack.append( value )
+
+        if hasattr( value, '__css__' ): value.__css__( self )
+
+        elif isinstance( value, basestring ):
+            self.file.write( value if isinstance( value, str ) else
+                             value.encode( self.encoding, 'strict' ) )
+
+        elif isinstance( value, Number ):
+            self.file.write( (unicode( value ) + u'px').encode( self.encoding ) )
+
+        elif isinstance( value, tuple ):
+            first = True
+            spc = u' '.encode( encoding )
+            for item in value: 
+                if first: first = False
+                else: self.file.write( spc )
+                self.write( item )
+
+        elif isinstance( value, Iterable ):
+            for item in value: self.write( item )
+
+        elif isinstance( value, Callable ): self.write( value() )
+
+        else: self.write( unicode( value ).encode( self.encoding, 'strict' ) )
+
+        self.stack.pop()
+        return self
+
+    def get_current_selector( self ):
+        """ Returns the linearized CSS-compatible selector representation based on
+        the ``selector`` properties of the values in the current `stack`.
+        
+        Selectors are understood to be either strings or tuples of selectors.
+        ``mythril.html.Element.cssid`` for a function that normalizes classes and
+        functions into CSS names.
+        """
+        pass
+
+def css_write( value, file, encoding=None ):
+    """ Writes the CSS byte representation of ``value`` to ``file``.
+
+    Before being written, all ``unicode`` instances are encoded using 
+    its ``encoding`` attribute. 
+
+    Note: at the moment, input strings are not "validated" because data-driven
+    CSS is pretty rare. If you plan on using user-submitted css rules/property
+    values, be sure to validate them ... somehow.
+    """
+    CssWriter( file, encoding or default_encoding ).write( value )
+
+def css_bytes( value, encoding=None ):
+    """ Returns the CSS byte representation of ``value``. See `css_write` for
+    details. """
+    encoding = encoding or default_encoding
+    s = StringIO(); CssWriter( s, encoding ).write( value )
+    return s.getvalue()
+
 class CssType( customtuple ):
     """ Represents the type of `css` and its derived (constructed) values.
 
@@ -51,7 +130,7 @@ class CssType( customtuple ):
     and corners for speed and for downlevel browsers. The host application
     should configure ``CssWriter.imageUrlPath`` and ``CssWriter.imageFilePath``
     if it plans to use them. Data URIs are used where the size is small.
-    For IE6/7 images are used all the time.
+    For IE6/7, these properties always use images.
     """
     # TODO: document all the built-in special properties
 
@@ -106,6 +185,9 @@ class CssType( customtuple ):
 
     imageUrlPath = u'/data-images'
     imageFilePath = u'data/images'
+
+    def __css__( self, writer ):
+        pass
 
 css = CssType()
 
@@ -177,73 +259,4 @@ def _( frm, to, height ):
                 unicode( data.encode( 'base64' ), 'ascii' ) + u') 0 0 repeat-x'),
             (u'*background', u'url(' + 
                 CssType.imageUrlPath + fname + u') 0 0 repeat-x'))
-
-
-class CssWriter( object ):
-    """ Writes arbitrary Python values to CSS. ``CssWriter.write_of`` allows
-    for the extension of this facility to new types. ``CssWriter.to_bytes`` is
-    a convenience for getting a byte string out of a (complex) value in one go
-    
-    Before being written, all ``unicode`` instances are encoded using 
-    its ``encoding`` attribute. 
-
-    Note: at the moment, input strings are not "validated" because data-driven
-    CSS is pretty rare. If you plan on using user-submitted css rules/property
-    values, be sure to validate them ... somehow.
-    """
-    _protocol = protocol( lambda obj, self: self.write( repr( obj ) ) )
-
-    def __init__( self, file, encoding=None ):
-        self.encoding = encoding or default_encoding
-        self.file = file
-        self.stack = []
-
-    def write( self, value ):
-        """ Translates the arbitrary Python ``value`` into CSS. This behaviour
-        can be extended with ``CssWriter.writer_of`` """
-        self.stack.append( value )
-        self._protocol( value, self )
-        self.stack.pop()
-        return self
-
-    @classmethod
-    def write_of( cls, typ ):
-        """ Decorator that registers a function as the handler for when objects
-        of type ``typ`` are passed to ``write``. The decorated function must
-        take the `CssWriter` as its first argument and the value as the second.
-        """
-        return (lambda func: 
-            cls._protocol.of( typ )( lambda val, self: func( self, val ) ))
-
-    @classmethod
-    def to_bytes( cls, value, encoding=None ):
-        encoding = encoding or default_encoding
-        s = StringIO(); cls( s, encoding ).write( value )
-        return s.getvalue()
-
-    @staticmethod
-    def compute_selector( stack ):
-        """ Mostly a utility for the other definitions in this module. Takes
-        a stack of values with a ``selector`` property (eg., ``CssType`` instances),
-        goes up the stack and returns the linearized CSS-compatible selector 
-        representation.
-
-        Selectors are understood to be comprised of only 
-        """
-
-
-@CssWriter.write_of( str )
-def _( wr, s ): wr.file.write( s )
-
-@CssWriter.write_of( unicode )
-def _( wr, s ): wr.file.write( s.encode( wr.encoding, 'strict' ) )
-
-@CssWriter.write_of( Number )
-def _( wr, num ): wr.file.write( (unicode( num ) + u'px').encode( wr.encoding ) )
-
-@CssWriter.write_of( tuple )
-def _( wr, nums ): wr.file.write( 
-    
-
-@CssWriter.write_of( CssType )
 

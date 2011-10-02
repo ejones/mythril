@@ -13,14 +13,13 @@ Corresponds to something equivalent to::
     
     <div class="foo-bar"><a class="some-link" href="#!">More stuff here</a></div>
 
-See `mythril.html.HtmlWriter` for the class that actually writes the HTML
-representation.
+Use `html_bytes` to write out the HTML.
 """
 import sys
 import re
 from types import NoneType
 from functools import partial
-from itertools import chain, starmap, imap
+from itertools import imap
 from collections import namedtuple, Callable, Iterable
 from numbers import Number
 from operator import itemgetter
@@ -30,13 +29,108 @@ from cStringIO import StringIO
 try: import simplejson as json
 except ImportError: import json # should this be the other way around?
 
-from mythril.protocol import protocol
 from mythril.util import customtuple
 
 noarg = object()
 
 default_encoding = 'UTF-8'
 default_lang = 'en'
+
+class HtmlWriterBlock( list ):
+    """ Internal use for `HtmlWriter` """
+    __slots__ = ('followed_by', 'section')
+    def __init__( self, section, *args, **kwargs ): 
+        self.followed_by = None
+        self.section = section
+        list.__init__( self, *args, **kwargs )
+
+class HtmlWriterSection( list ):
+    """ Internal use for `HtmlWriter` """
+    __slots__ = ('seen_keys',)
+    def __init__( self, *args, **kwargs ): 
+        self.seen_keys = set()
+        list.__init__( self, *args, **kwargs )
+
+class HtmlWriter( object ):
+    """ Writes Python values as an HTML byte representation. For advanced use. See
+    `html_bytes` in this module for a simpler method of generating HTML. Any arbitrary
+    Python type can support/extend being written to ``HtmlWriter`` by implementing
+    an ``__html__`` method; it should take the ``HtmlWriter`` instance as its sole
+    argument.
+    
+    For escaping, ``str`` instances are decoded according to its ``encoding``.
+    Before being written, all ``unicode`` instances are encoded, again, using
+    its ``encoding`` attribute. The string types ``safe_bytes`` and ``safe_unicode``,
+    in this module, are not escaped (use with caution!).
+    
+    It is designed to support writing keyed "resources" to specific
+    locations in the document (mostly, CSS and JS includes) this allows these
+    resources to appear multiple times at any location in the document and
+    be moved, and only appear once, at the appropriate location. See the
+    classes `mythril.html.Resource` and `mythril.html.Include`. Be careful not
+    to `Include` a resource inside itself; cycles are not detected. 
+    """
+    # TODO: implement in C
+    def __init__( self, encoding=None ):
+        self.encoding = encoding or default_encoding
+        self.stack = []
+        self.current = HtmlWriterBlock( None )
+        self.sections = { None: HtmlWriterSection( (self.current,) ) }
+                           # { section_name: [ HtmlWriterBlock ] }. 
+                           # None will be the default section
+
+    def write( self, value ):
+        """ Writes the arbitrary Python value ``value`` as HTML to the internal
+        buffers. """
+        self.stack.append( value )
+        
+        if hasattr( value, '__html__' ): value.__html__( self )
+        elif isinstance( value, basestring ):
+            unesc = value if isinstance( value, unicode ) \
+                    else value.decode( self.encoding, 'strict' )
+            self.current.append( 
+                html_escape( unesc, True ).encode( self.encoding, 'strict' ) )
+        elif isinstance( value, Iterable ):
+            for item in value: self.write( item )
+        elif isinstance( value, Callable ): self.write( value() )
+        else: self.current.append( 
+                    unicode( value ).encode( self.encoding, 'strict' ) )
+        
+        self.stack.pop()
+        return self
+        
+    def write_section( self, section_name, file ):
+        """ Internal. """
+        section = self.sections.get( section_name )
+        if section:
+            for block in section:
+                for data in block: file.write( data )
+                if block.followed_by is not None: 
+                    self.write_section( block.followed_by, file )
+
+    def getvalue( self, section=noarg ):
+        """ Concats all the seen data into a single buffer """
+        s = StringIO(); self.write_section( None, s )
+        return s.getvalue()
+
+def html_bytes( value, encoding=None ):
+    """ Converts ``value`` to its HTML byte representation.
+
+    For escaping, ``str`` instances are decoded according ``encoding``.
+    Before being written, all ``unicode`` instances are encoded, again, using
+    ``encoding``. The string types ``safe_bytes`` and ``safe_unicode``,
+    in this module, are not escaped (use with caution!).
+    
+    It is designed to support writing keyed "resources" to specific
+    locations in the document (mostly, CSS and JS includes) this allows these
+    resources to appear multiple times at any location in the document and
+    be moved, and only appear once, at the appropriate location. See the
+    classes `mythril.html.Resource` and `mythril.html.Include`. Be careful not
+    to `Include` a resource inside itself; cycles are not detected. 
+
+    For advanced usage and customization, see `HtmlWriter` in this module.
+    """
+    return HtmlWriter( encoding or default_encoding ).write( value ).getvalue()
 
 Attribute = namedtuple( 'Attribute', 'name,value' )
 
@@ -51,6 +145,13 @@ def from_args( args=(), kwargs={} ):
         k = k.replace( '__', ':' ).replace( '_', '-' )
         if k == u'class': v = Element.cssid( v )
         yield Attribute( k, v )
+
+@partial( setattr, Attribute, '__html__' )
+def __html__( self, wr ):
+    wr.write( (safe_unicode( u' ' ), self.name, 
+                 safe_unicode( u'="' ), self.value, safe_unicode( u'"' )) )
+
+
 
 # NB: can't use namedtuple here because its constructor seems to call
 #  __getitem__, which ends up messing with the cosmos
@@ -120,6 +221,13 @@ class Element( customtuple ):
         setattr( mod, etype_name, etype )
         setattr( mod, name, etype( attrs=(), children=() ) )
 
+    def __html__( self, wr ):
+        wr.write( (safe_unicode( u'<' ), self.name, 
+                    self.attrs, safe_unicode( u'>' )) )
+        if not self.empty: 
+            wr.write( (self.children, safe_unicode( u'</' ),
+                         self.name, safe_unicode( u'>' )) )
+
 map( Element.register, u'''
     a abbr acronym address applet b bdo big blockquote body button
     caption center cite code colgroup dd dfn div dl dt doc html em fieldset
@@ -131,6 +239,24 @@ map( Element.register, u'''
 map( lambda name: Element.register( name, True ),
      u"area base br col hr img input link meta param".split() )
 
+def __script_and_style_html__( self, wr ):
+    wr.write( (safe_unicode( u'<' ), self.name, self.attrs, safe_unicode( u'>' )) )
+    for s in self.children:
+        if isinstance( s, str ): wr.current.append( s )
+        elif isinstance( s, unicode ): wr.current.append( s.encode( enc, 'strict' ) )
+        else: raise ValueError( 
+                'script/style tag: unknown type ' + type( s ).__name__ )
+                        
+    wr.write( (safe_unicode( u'</' ), self.name, safe_unicode( u'>' )) )
+
+ScriptType.__html__ = __script_and_style_html__
+StyleType.__html__ = __script_and_style_html__
+
+@partial( setattr, DocType, '__html__' )
+def __html__( self, wr ):
+    wr.write( (safe_unicode( u'<!DOCTYPE html>' ), 
+                 HtmlType( self.attrs, self.children )) )
+
 # safe_bytes and safe_unicode borrowed from Travis Rudd's "markup.py"
 class safe_bytes(str):
     def decode(self, *args, **kws):
@@ -138,12 +264,12 @@ class safe_bytes(str):
 
     def __add__(self, o):
         res = super(safe_bytes, self).__add__(o)
-        if isinstance(o, safe_unicode):
-            return safe_unicode(res)
-        elif isinstance(o, safe_bytes):
-            return safe_bytes(res)
-        else:
-            return res
+        if isinstance(o, safe_unicode): return safe_unicode(res)
+        elif isinstance(o, safe_bytes): return safe_bytes(res)
+        else: return res
+
+    def __html__( self, writer ):
+        writer.current.append( self )
 
 class safe_unicode(unicode):
     def encode(self, *args, **kws):
@@ -151,8 +277,11 @@ class safe_unicode(unicode):
 
     def __add__(self, o):
         res = super(safe_unicode, self).__add__(o)
-        return (safe_unicode(res)
-                if isinstance(o, (safe_unicode, safe_bytes)) else res)
+        if isinstance(o, (safe_unicode, safe_bytes)): return safe_unicode(res)
+        else: return res
+
+    def __html__( self, writer ):
+        writer.current.append( self.encode( writer.encoding, 'strict' ) )
                 
 class Page( customtuple ):
     """ Useful wrapper for the usual features of a full HTML document """
@@ -160,15 +289,27 @@ class Page( customtuple ):
         encoding = encoding or default_encoding
         lang = lang or default_lang
         return tuple.__new__( cls, (title, content, encoding, lang) )
-
-    def write_to( self, out ):
-        """ Convenience for `html_write` since we already have the encoding """
-        return html_write( self, out, self.encoding )
         
     def to_bytes( self ):
-        """ Convenience for `HtmlWriter.to_bytes` since we already have the
+        """ Convenience for `html_bytes` since we already have the
         encoding """
-        return HtmlWriter.to_bytes( self, self.encoding )
+        return html_bytes( self, self.encoding )
+
+    def __html__( self, wr ):
+        wr.write( doc( lang=self.lang )[
+            head[ meta( (u'http-equiv', u'Content-Type'),
+                        (u'content', u'text/html;charset=' + self.encoding) ),
+                  title[ self.title ],
+                  Include( 'css_files' ),
+                  safe_unicode( u'<style type="text/css">'),
+                  Include( 'css' ),
+                  safe_unicode( u'</style>' ) ], # TODO: check if there actually
+                                                 #  is any CSS (also for JS below)
+            body[ self.content,
+                  Include( 'js_files' ),
+                  safe_unicode( u'<script type="text/javascript">' ),
+                  Include( 'js' ),
+                  safe_unicode( u'</script>' )]] )
 
 class Resource( customtuple ):
     """ Describes a part of an HTML document that must appear at a specific 
@@ -177,29 +318,65 @@ class Resource( customtuple ):
     def __new__( cls, section, content, key=None ):
         return tuple.__new__( cls, (section, content, key or object()) )
 
+    def __html__( self, wr ):
+        section = wr.sections.get( self.section )
+        if section is None: 
+            section = wr.sections[ self.section ] = \
+                HtmlWriterSection( (HtmlWriterBlock( self.section ),) )
+        elif self.key in section.seen_keys: return
+
+        section.seen_keys.add( self.key )
+        old = wr.current
+        wr.current = section[ -1 ]
+        wr.write( self.content )
+        wr.current = old
+
 class Include( customtuple ):
     """ Marks its location in the doucment as the point for inclusion of
     the corresponding `Resource` elements """
     def __new__( cls, section ):
         return tuple.__new__( cls, (section,) )
 
+    def __html__( self, wr ):
+        wr.current.followed_by = self.section
+        sec = wr.current.section
+        wr.current = HtmlWriterBlock( sec )
+        wr.sections[ sec ].append( wr.current )
+
 class CSSFile( customtuple ):
     """ Represents a `Resource` of a single CSS file. Resource section name is
     'css_files' """
     def __new__( cls, url, key=None ):
         return tuple.__new__( cls, (url, key or object()) )
-        
+
+    def __html__( self, wr ):
+        wr.write( Resource( 'css_files', key=self.key,
+                            content=link( (u'rel', u'stylesheet'), 
+                                          (u'type', u'text/css'),
+                                          href=self.url )))
+
 class JSFile( customtuple ):
     """ Represents a `Resource` of a single JS file. Resource section name is
     'js_files' """
     def __new__( cls, url, key=None ):
         return tuple.__new__( cls, (url, key or object()) )
 
+    def __html__( self, wr ):
+        wr.write( Resource( 'js_files', key=self.key,
+                            content=script( (u'type', u'text/javascript'), 
+                                            src=self.url )))
+
 class StyleResource( customtuple ):
     """ A `Resource` for inline CSS rules. The ``<style>`` tag is added
     automatically. Resource section name is 'css' """
     def __new__( cls, content, key=None ):
         return tuple.__new__( cls, (content, key or object()) )
+    
+    def __html__( self, wr ):
+        c = self.content
+        wr.write( Resource( 'css', key=self.key,
+                            content=( safe_unicode( c ) if isinstance( c, unicode )
+                                      else safe_bytes( c ) )))
 
 class ScriptResource( customtuple ):
     """ A `Resource` for inline JS code. The ``<script>`` tag is added
@@ -207,214 +384,11 @@ class ScriptResource( customtuple ):
     def __new__( cls, content, key=None ):
         return tuple.__new__( cls, (content, key or object()) )
 
-class HtmlWriterBlock( list ):
-    """ Internal use for `HtmlWriter` """
-    __slots__ = ('followed_by', 'section')
-    def __init__( self, section, *args, **kwargs ): 
-        self.followed_by = None
-        self.section = section
-        list.__init__( self, *args, **kwargs )
-
-class HtmlWriterSection( list ):
-    """ Internal use for `HtmlWriter` """
-    __slots__ = ('seen_keys',)
-    def __init__( self, *args, **kwargs ): 
-        self.seen_keys = set()
-        list.__init__( self, *args, **kwargs )
-
-class HtmlWriter( object ):
-    """ Writes arbitrary Python values into HTML. ``HtmlWriter.write_of``
-    allows for the extension of this facility to new types. See
-    ``HtmlWriter.to_bytes`` for a convenience method for writing a bunch of
-    stuff into HTML in one go (this should be the primary high-level use). 
-    
-    For escaping, ``str`` instances are decoded according to its ``encoding``.
-    Before being written, all ``unicode`` instances are encoded, again, using
-    its ``encoding`` attribute.
-    
-    Additionally, it is designed to support writing keyed "resources" to specific
-    locations in the document (mostly, CSS and JS includes) this allows these
-    resources to appear multiple times at any location in the document and
-    be moved, and only appear once, at the appropriate location. See the
-    classes `mythril.html.Resource` and `mythril.html.Include`. Be careful not
-    to `Include` a resource inside itself; cycles are not detected. Neither are
-    repeat `Includes`.
-    """
-    _protocol = protocol( lambda obj, self: self.write( repr( obj ) ) )
-    
-    def __init__( self, encoding=None ):
-        self.encoding = encoding or default_encoding
-        self.stack = []
-        self.current = HtmlWriterBlock( None )
-        self.sections = { None: HtmlWriterSection( (self.current,) ) }
-                           # { section_name: [ HtmlWriterBlock ] }. 
-                           # None will be the default section
-
-    def write( self, value ):
-        """ Writes the arbitrary Python value ``value`` as HTML to the internal
-        file [sections], This facility can be extended with
-        ``HtmlWriter.write_of`` """
-        self.stack.append( value )
-        self._protocol( value, self )
-        self.stack.pop()
-        return self
-        
-    def getvalue( self, section=noarg ):
-        """ Concats all the seen data into a single buffer """
-        s = StringIO(); self.write_section( None, s )
-        return s.getvalue()
-
-    def write_section( self, section_name, file ):
-        """ Internal. """
-        section = self.sections.get( section_name )
-        if section:
-            for block in section:
-                for data in block: file.write( data )
-                if block.followed_by is not None: 
-                    self.write_section( block.followed_by, file )
-
-    @classmethod
-    def write_of( cls, type ):
-        """ Allows you to extend HtmlWriter functionality to encompass new
-        types.  Decorate a function with ``@HtmlWriter.write_of( <Your Type>
-        )``. The function should take the ``HtmlWriter`` as the *first*
-        argument and the value (of your type) as the *second*. """
-        return lambda func: \
-            cls._protocol.of( type )( lambda val, self: func( self, val ) )
-        
-    @classmethod
-    def to_bytes( cls, value, encoding=None ):
-        """ Convenience for quickly converting ``value`` into its equivalent
-        HTML byte representation. """
-        encoding = encoding or default_encoding
-        return cls( encoding ).write( value ).getvalue()
-
-@HtmlWriter.write_of( str )
-def _( wr, s ):
-    wr.current.append( 
-        html_escape( unicode( s, wr.encoding, 'strict' ), True )
-            .encode( wr.encoding, 'strict' ) )
-
-@HtmlWriter.write_of( unicode )
-def _( wr, s ): 
-    wr.current.append( html_escape( s, True ).encode( wr.encoding, 'strict' ) )
-
-@HtmlWriter.write_of( safe_bytes )
-def _( wr, s ): wr.current.append( s )
-
-@HtmlWriter.write_of( safe_unicode )
-def _( wr, s ): wr.current.append( s.encode( wr.encoding, 'strict' ) )
-
-@HtmlWriter.write_of( NoneType )
-def _( wr, non ): pass
-
-@HtmlWriter.write_of( bool )
-def _( wr, b ): wr.current.append( unicode( b ).encode( wr.encoding, 'strict' ) )
-
-@HtmlWriter.write_of( Number )
-def _( wr, num ): wr.current.append( unicode( num ).encode( wr.encoding, 'strict' ) )
-
-@HtmlWriter.write_of( Callable )
-def _( wr, f ): wr.write( f() )
-
-@HtmlWriter.write_of( Iterable )
-def _( wr, seq ): 
-    for x in seq: wr.write( x )
-
-@HtmlWriter.write_of( Resource )
-def _( wr, res ):
-    section = wr.sections.get( res.section )
-    if section is None: 
-        section = wr.sections[ res.section ] = \
-            HtmlWriterSection( (HtmlWriterBlock( res.section ),) )
-    elif res.key in section.seen_keys: return
-
-    section.seen_keys.add( res.key )
-    old = wr.current
-    wr.current = section[ -1 ]
-    wr.write( res.content )
-    wr.current = old
-
-@HtmlWriter.write_of( Include )
-def _( wr, inc ):
-    wr.current.followed_by = inc.section
-    sec = wr.current.section
-    wr.current = HtmlWriterBlock( sec )
-    wr.sections[ sec ].append( wr.current )
-
-@HtmlWriter.write_of( Attribute )
-def _( wr, attr ):
-    wr.write( (safe_unicode( u' ' ), attr.name, 
-                 safe_unicode( u'="' ), attr.value, safe_unicode( u'"' )) )
-
-def __write_element( wr, elem ):
-    wr.write( (safe_unicode( u'<' ), elem.name, elem.attrs, safe_unicode( u'>' )) )
-    if not elem.empty: 
-        wr.write( (elem.children, safe_unicode( u'</' ),
-                     elem.name, safe_unicode( u'>' )) )
-
-HtmlWriter.write_of( Element )( __write_element )
-
-def __write_script_and_style( wr, elem ):
-    wr.write( (safe_unicode( u'<' ), elem.name, elem.attrs, safe_unicode( u'>' )) )
-    for s in elem.children:
-        if isinstance( s, str ): wr.current.append( s )
-        elif isinstance( s, unicode ): wr.current.append( s.encode( enc, 'strict' ) )
-        else: raise ValueError( 
-                'script/style tag: unknown type ' + type( s ).__name__ )
-                        
-    wr.write( (safe_unicode( u'</' ), elem.name, safe_unicode( u'>' )) )
-        
-HtmlWriter.write_of( ScriptType )( __write_script_and_style )
-HtmlWriter.write_of( StyleType )( __write_script_and_style )
-                
-@HtmlWriter.write_of( DocType )
-def _( wr, elem ):
-    wr.write( (safe_unicode( u'<!DOCTYPE html>' ), 
-                 HtmlType( elem.attrs, elem.children )) )
-
-@HtmlWriter.write_of( CSSFile )
-def _( wr, cssf ):
-    wr.write( Resource( 'css_files', key=cssf.key,
-                        content=link( (u'rel', u'stylesheet'), 
-                                      (u'type', u'text/css'),
-                                      href=cssf.url )))
-
-@HtmlWriter.write_of( JSFile )
-def _( wr, jsf ):
-    wr.write( Resource( 'js_files', key=jsf.key,
-                        content=script( (u'type', u'text/javascript'), src=jsf.url )))
-
-@HtmlWriter.write_of( StyleResource )
-def _( wr, styl ):
-    c = styl.content
-    wr.write( Resource( 'css', key=styl.key,
-                        content=( safe_unicode( c ) if isinstance( c, unicode )
-                                  else safe_bytes( c ) )))
-
-@HtmlWriter.write_of( ScriptResource )
-def _( wr, styl ):
-    c = styl.content
-    wr.write( Resource( 'js', key=styl.key,
-                        content=( safe_unicode( c ) if isinstance( c, unicode )
-                                  else safe_bytes( c ) )))
-
-@HtmlWriter.write_of( Page )
-def _( wr, pg ):
-    wr.write( doc( lang=pg.lang )[
-        head[ meta( (u'http-equiv', u'Content-Type'),
-                    (u'content', u'text/html;charset=' + pg.encoding) ),
-              title[ pg.title ],
-              Include( 'css_files' ),
-              safe_unicode( u'<style type="text/css">'),
-              Include( 'css' ),
-              safe_unicode( u'</style>' ) ], # TODO: check if there actually
-                                             #  is any CSS (also for JS below)
-        body[ pg.content,
-              Include( 'js_files' ),
-              safe_unicode( u'<script type="text/javascript">' ),
-              Include( 'js' ),
-              safe_unicode( u'</script>' )]] )
+    def __html__( self, wr ):
+        c = self.content
+        wr.write( Resource( 'js', key=self.key,
+                            content=( safe_unicode( c ) if isinstance( c, unicode )
+                                      else safe_bytes( c ) )))
 
 def js_injection( lvalue, content, encoding=None ):
     """ Utility for injecting content into a running Page.  In JavaScript,
@@ -427,7 +401,7 @@ def js_injection( lvalue, content, encoding=None ):
     bcontent = wr.write( (content, Include( 'js_files' )) ).getvalue()
     
     def get_section_value( section_name ):
-        s = StringIO(); wr.write_section( section_name, s );
+        s = StringIO(); wr.write_section( section_name, s )
         return s.getvalue()
         
     css_files = get_section_value( 'css_files' )
@@ -440,10 +414,10 @@ def js_injection( lvalue, content, encoding=None ):
         binject += css
         binject += u'</style>'.encode( encoding, 'strict' )
     binject += bcontent
-    inject_html = unicode( binject, encoding, 'strict' )
 
     if isinstance( lvalue, unicode ): lvalue = lvalue.encode( encoding, 'strict' )
-    return ''.join( (lvalue, u'={content:'.encode( encoding, 'strict' ),
-                     json.dumps( inject_html ).encode( encoding, 'strict' ),
-                     u',init:function(){'.encode( encoding, 'strict' ),
-                     js, u'}}'.encode( encoding, 'strict' )) )
+    return ''.join( 
+        (lvalue, u'={content:'.encode( encoding, 'strict' ),
+         json.dumps( binject, encoding=encoding ).encode( encoding, 'strict' ),
+         u',init:function(){'.encode( encoding, 'strict' ),
+         js, u'}}'.encode( encoding, 'strict' )) )
