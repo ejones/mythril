@@ -23,9 +23,10 @@ to extend, special property names like "pos", "size". See `CssType`.
 import Image
 from cStringIO import StringIO
 from functools import partial
-from itertools import izip
+from itertools import izip, imap
 from numbers import Number
 from uuid import uuid4
+from operator import add
 
 import mythril.html
 from mythril.html import Element, Attribute
@@ -52,10 +53,18 @@ class CssWriter( object ):
         self.encoding = encoding or default_encoding
         self.file = file
         self.stack = []
+        self.selector = ('',)
 
     def write( self, value ):
         """ Translates the arbitrary Python ``value`` into CSS. """
         self.stack.append( value )
+
+        oldselector = self.selector
+        if hasattr( value, 'selector' ):
+            childsel = value.selector if isinstance( value.selector, tuple ) \
+                       else (value.selector,)
+            self.selector = tuple( a + u' ' + b for a in self.selector
+                                                for b in childsel)
 
         if hasattr( value, '__css__' ): value.__css__( self )
 
@@ -66,14 +75,6 @@ class CssWriter( object ):
         elif isinstance( value, Number ):
             self.file.write( (unicode( value ) + u'px').encode( self.encoding ) )
 
-        elif isinstance( value, tuple ):
-            first = True
-            spc = u' '.encode( encoding )
-            for item in value: 
-                if first: first = False
-                else: self.file.write( spc )
-                self.write( item )
-
         elif isinstance( value, Iterable ):
             for item in value: self.write( item )
 
@@ -81,18 +82,9 @@ class CssWriter( object ):
 
         else: self.write( unicode( value ).encode( self.encoding, 'strict' ) )
 
+        self.selector = oldselector
         self.stack.pop()
         return self
-
-    def get_current_selector( self ):
-        """ Returns the linearized CSS-compatible selector representation based on
-        the ``selector`` properties of the values in the current `stack`.
-        
-        Selectors are understood to be either strings or tuples of selectors.
-        ``mythril.html.Element.cssid`` for a function that normalizes classes and
-        functions into CSS names.
-        """
-        pass
 
 def css_write( value, file, encoding=None ):
     """ Writes the CSS byte representation of ``value`` to ``file``.
@@ -113,6 +105,17 @@ def css_bytes( value, encoding=None ):
     s = StringIO(); CssWriter( s, encoding ).write( value )
     return s.getvalue()
 
+@partial( setattr, Attribute, '__css__' )
+def __css__( self, writer ):
+    writer.write( (self.name, u':') )
+
+    if isinstance( self.value, tuple ):
+        for i, item in enumerate( self.value ): 
+            if i > 0: writer.write( u' ' )
+            writer.write( item )
+    else:
+        writer.write( self.value )
+
 class CssType( customtuple ):
     """ Represents the type of `css` and its derived (constructed) values.
 
@@ -126,11 +129,11 @@ class CssType( customtuple ):
     ``(property_name, property_value)``, to the ``special`` dict. It must be
     added by CSS-name (i.e., "background-gradient", not "background_gradient").
 
-    Some special properties statically generating images, eg. gradients
-    and corners for speed and for downlevel browsers. The host application
-    should configure ``CssWriter.imageUrlPath`` and ``CssWriter.imageFilePath``
-    if it plans to use them. Data URIs are used where the size is small.
-    For IE6/7, these properties always use images.
+    Some special properties statically generating images, eg. gradients and
+    corners for speed and for downlevel browsers. The host application should
+    configure ``CssWriter.resourceUrlPath`` and ``CssWriter.resourceFilePath``
+    if it plans to use them. Data URIs are used where the size is small.  For
+    IE6/7, these properties always use images.
     """
     # TODO: document all the built-in special properties
 
@@ -168,7 +171,7 @@ class CssType( customtuple ):
 
     @staticmethod
     def run_specials( attrs ):
-        """ Internal utility for correcting special attribute names """
+        """ Internal utility for expanding special attribute names """
         for a in attrs:
             if a.name in CssType.special:
                 args = a.value if isinstance( a.value, tuple ) else (a.value,)
@@ -183,11 +186,18 @@ class CssType( customtuple ):
         if a: return u'rgba(%s,%s,%s,%s)' % (r, g, b, a)
         else: return u'rgb(%s,%s,%s)' % (r, g, b)
 
-    imageUrlPath = u'/data-images'
-    imageFilePath = u'data/images'
+    resourceUrlPath = u'/css-resources'
+    resourceFilePath = u'data/css-resources'
 
     def __css__( self, writer ):
-        pass
+        writer.write( (writer.selector, u'{') )
+        for i, attr in enumerate( self.attrs ):
+            if i > 0: writer.write( u',' )
+            writer.write( attr )
+        writer.write( u'}' )
+
+        for child in self.children:
+            writer.write( child )
 
 css = CssType()
 
@@ -247,16 +257,16 @@ def _( frm, to, angle=None ):
 def _( frm, to, height ):
     cpairs = zip( frm, to )
     im = Image.new( 'RGBA' if len( frm ) > 3 else 'RGB', (1, height) )
-    im.putdata( list( tuple( a + (b - a) * i // height for a, b in cpairs )
+    im.putdata( list( tuple( a + (b - a) * i // (height - 1) for a, b in cpairs )
                       for i in xrange( height ) ))
     sio = StringIO(); im.save( sio, 'PNG' )
     data = sio.getvalue()
     
     fname = u'/_%x.png' % uuid4().fields[5]
-    with open( CssType.imageFilePath + fname, 'wb' ) as f: f.write( data )
+    with open( CssType.resourceFilePath + fname, 'wb' ) as f: f.write( data )
     
     return ((u'background', u'url(data:image/png;base64,' +
-                unicode( data.encode( 'base64' ), 'ascii' ) + u') 0 0 repeat-x'),
+                data.encode( 'base64' ) + u') 0 0 repeat-x'),
             (u'*background', u'url(' + 
-                CssType.imageUrlPath + fname + u') 0 0 repeat-x'))
+                CssType.resourceUrlPath + fname + u') 0 0 repeat-x'))
 

@@ -194,7 +194,7 @@ class Element( customtuple ):
         ``val`` is a ``basestring``, it is returned. If it is something with
         a ``.__name__`` (class, function) it will be turned into the
         hyphenated representation (e.g, MyWidget -> 'my-widget'). If ``val`` is
-        a ``tuple``, `cssid` is called recursively on its members.
+        a ``tuple``, `cssid` is called on its members.
         """
         if isinstance( val, basestring ): return val
         elif isinstance( val, tuple ): return tuple( imap( Element.cssid, val ) )
