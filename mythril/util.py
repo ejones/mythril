@@ -37,3 +37,18 @@ class customtuple( tuple ):
     __metaclass__ = TupleMeta
     __slots__ = ()
     __getnewargs__ = lambda self: tuple( self )
+
+def asmethod( cls, name=None ):
+    """ Decorator that attaches the function as a method of ``cls``. Use ``name``
+    to override the default, which uses the function's ``__name__``, to get the
+    member name to use. Returns the function. """
+    def dec( f ): 
+        mname = name
+        if not mname:
+            try: mname = f.__name__
+            except AttributeError as e:
+                try: mname = f.__get__(0).__name__
+                except AttributeError: raise e
+        setattr( cls, mname, f )
+        return f
+    return dec

@@ -13,7 +13,7 @@ Corresponds to something equivalent to::
     
     <div class="foo-bar"><a class="some-link" href="#!">More stuff here</a></div>
 
-Use `html_bytes` to write out the HTML.
+Use `dump` or `dumps` to write out the HTML.
 """
 import sys
 import re
@@ -29,7 +29,7 @@ from cStringIO import StringIO
 try: import simplejson as json
 except ImportError: import json # should this be the other way around?
 
-from mythril.util import customtuple
+from mythril.util import customtuple, asmethod
 
 noarg = object()
 
@@ -52,11 +52,11 @@ class HtmlWriterSection( list ):
         list.__init__( self, *args, **kwargs )
 
 class HtmlWriter( object ):
-    """ Writes Python values as an HTML byte representation. For advanced use. See
-    `html_bytes` in this module for a simpler method of generating HTML. Any arbitrary
-    Python type can support/extend being written to ``HtmlWriter`` by implementing
-    an ``__html__`` method; it should take the ``HtmlWriter`` instance as its sole
-    argument.
+    """ Writes Python values as an HTML byte representation. For advanced use.
+    See `dump` or `dumps` in this module for a simpler method of generating
+    HTML. Any arbitrary Python type can support/extend being written to
+    ``HtmlWriter`` by implementing an ``__html__`` method; it should take the
+    ``HtmlWriter`` instance as its sole argument.
     
     For escaping, ``str`` instances are decoded according to its ``encoding``.
     Before being written, all ``unicode`` instances are encoded, again, using
@@ -113,7 +113,7 @@ class HtmlWriter( object ):
         s = StringIO(); self.write_section( None, s )
         return s.getvalue()
 
-def html_bytes( value, encoding=None ):
+def dumps( value, encoding=None ):
     """ Converts ``value`` to its HTML byte representation.
 
     For escaping, ``str`` instances are decoded according ``encoding``.
@@ -132,26 +132,49 @@ def html_bytes( value, encoding=None ):
     """
     return HtmlWriter( encoding or default_encoding ).write( value ).getvalue()
 
+def dump( value, fp, encoding=None ):
+    """ Serializes ``value`` as HTML to the writable file-like object ``fp``.
+    For all other behavior/arguments are equivalent to `dumps` in this module.
+
+    Note that the HTML writing process involves backreferences (ie.,
+    substitutions), so the converted data must be buffered anyway. The use of
+    this rather than `dumps` would be purely a matter of convenience (and it is
+    here for similarity to other Python serialization APIs)
+    """
+    fp.write( dumps( value, encoding ) )
+
+def cssid( val ):
+    """
+    Normalizes the identifiers in ``val`` into css-ish strings. If
+    ``val`` is a ``basestring``, it is returned. If it is something with
+    a ``.__name__`` (class, function) it will be turned into the
+    hyphenated representation (e.g, MyWidget -> 'my-widget'). If ``val`` is
+    a ``tuple``, `cssid` is called on its members.
+    """
+    if isinstance( val, basestring ): return val
+    elif isinstance( val, tuple ): return tuple( imap( cssid, val ) )
+    name = val.__name__
+    if '_' in name: return name.replace( '_', '-' )
+    return re.sub( r'(?<=[a-z0-9])(?=[A-Z])', '-', name ).lower()
+
 Attribute = namedtuple( 'Attribute', 'name,value' )
 
-@partial( setattr, Attribute, 'from_args' )
-@staticmethod
-def from_args( args=(), kwargs={} ):
+@asmethod( Attribute )
+@classmethod
+def from_args( cls, args=(), kwargs={} ):
     for k, v in args:
-        if k == u'class': v = Element.cssid( v )
-        yield Attribute( k, v )
+        if k == u'class': v = cssid( v )
+        yield cls( k, v )
     for k, v in kwargs.iteritems():
         if k.endswith( '_' ): k = k[ :-1 ]
         k = k.replace( '__', ':' ).replace( '_', '-' )
-        if k == u'class': v = Element.cssid( v )
-        yield Attribute( k, v )
+        if k == u'class': v = cssid( v )
+        yield cls( k, v )
 
-@partial( setattr, Attribute, '__html__' )
+@asmethod( Attribute )
 def __html__( self, wr ):
     wr.write( (safe_unicode( u' ' ), self.name, 
                  safe_unicode( u'="' ), self.value, safe_unicode( u'"' )) )
-
-
 
 # NB: can't use namedtuple here because its constructor seems to call
 #  __getitem__, which ends up messing with the cosmos
@@ -186,21 +209,6 @@ class Element( customtuple ):
         """
         if not isinstance( arg, tuple ): arg = (arg,)
         return type( self )( self.attrs, arg )
-
-    @staticmethod
-    def cssid( val, camel_match=re.compile( r'(?<=[a-z0-9])(?=[A-Z])' ) ):
-        """
-        Normalizes the identifiers in ``val`` into css-ish strings. If
-        ``val`` is a ``basestring``, it is returned. If it is something with
-        a ``.__name__`` (class, function) it will be turned into the
-        hyphenated representation (e.g, MyWidget -> 'my-widget'). If ``val`` is
-        a ``tuple``, `cssid` is called on its members.
-        """
-        if isinstance( val, basestring ): return val
-        elif isinstance( val, tuple ): return tuple( imap( Element.cssid, val ) )
-        name = val.__name__
-        if '_' in name: return name.replace( '_', '-' )
-        return camel_match.sub( '-', name ).lower()
 
     @classmethod
     def register( cls, name, empty=False ):
@@ -239,6 +247,8 @@ map( Element.register, u'''
 map( lambda name: Element.register( name, True ),
      u"area base br col hr img input link meta param".split() )
 
+@asmethod( ScriptType, '__html__' )
+@asmethod( StyleType, '__html__' )
 def __script_and_style_html__( self, wr ):
     wr.write( (safe_unicode( u'<' ), self.name, self.attrs, safe_unicode( u'>' )) )
     for s in self.children:
@@ -249,11 +259,8 @@ def __script_and_style_html__( self, wr ):
                         
     wr.write( (safe_unicode( u'</' ), self.name, safe_unicode( u'>' )) )
 
-ScriptType.__html__ = __script_and_style_html__
-StyleType.__html__ = __script_and_style_html__
-
-@partial( setattr, DocType, '__html__' )
-def __html__( self, wr ):
+@asmethod( DocType, '__html__' )
+def __doc_html__( self, wr ):
     wr.write( (safe_unicode( u'<!DOCTYPE html>' ), 
                  HtmlType( self.attrs, self.children )) )
 
@@ -290,10 +297,14 @@ class Page( customtuple ):
         lang = lang or default_lang
         return tuple.__new__( cls, (title, content, encoding, lang) )
         
-    def to_bytes( self ):
-        """ Convenience for `html_bytes` since we already have the
+    def dumps( self ):
+        """ Convenience for `dump` since we already have the
         encoding """
-        return html_bytes( self, self.encoding )
+        return dumps( self, self.encoding )
+
+    def dump( self, fp ):
+        """ Convenience for `dumps` since we already have the encoding """
+        return dump( self, fp, self.encoding )
 
     def __html__( self, wr ):
         wr.write( doc( lang=self.lang )[

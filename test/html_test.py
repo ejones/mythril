@@ -7,18 +7,16 @@ class CamelC4se3Name( object ): pass
 def some_func_name(): pass
 
 def test_cssid():
-    eq_( Element.cssid( 'foo-bar' ), 'foo-bar' )
-    eq_( Element.cssid( CamelCasedName ), 'camel-cased-name' )
-    eq_( Element.cssid( some_func_name ), 'some-func-name' )
-    eq_( Element.cssid( (CamelCasedName, (CamelC4se3Name, some_func_name), 'foo') ),
+    eq_( cssid( 'foo-bar' ), 'foo-bar' )
+    eq_( cssid( CamelCasedName ), 'camel-cased-name' )
+    eq_( cssid( some_func_name ), 'some-func-name' )
+    eq_( cssid( (CamelCasedName, (CamelC4se3Name, some_func_name), 'foo') ),
             ('camel-cased-name', ('camel-c4se3-name', 'some-func-name'), 'foo') )
     
 def test_html():
-    eq_( html_bytes(
-            [ 'a', 'b', u'c', ('d', u'e'), 
-              set([ 'f', 'f' ]), 4, 4.5,
-              (i*2 for i in xrange(5)) ],
-            'UTF-8'),
+    eq_( dumps( [ 'a', 'b', u'c', ('d', u'e'), set([ 'f', 'f' ]), 4, 4.5,
+                  (i*2 for i in xrange(5)) ],
+               'UTF-8'),
          'abcdef44.502468' )
 
     eq_( Page( 'An Example', encoding='UTF-8', lang='en',
@@ -34,7 +32,7 @@ def test_html():
                 script( type='text/javascript' )[
                     'var x = 1 < 2, y = "&";' ],
                 style( type='text/css' )[
-                    'body:after { content: \'&\'; }' ] ]).to_bytes(),
+                    'body:after { content: \'&\'; }' ] ]).dumps(),
          '<!DOCTYPE html><html lang="en"><head><meta http-equiv="Content-Type" '
          'content="text/html;charset=UTF-8"><title>An Example</title>'
          '<style type="text/css"></style></head><body>'
@@ -47,7 +45,7 @@ def test_html():
          '<style type="text/css">body:after { content: \'&\'; }</style>'
          '<script type="text/javascript"></script></body></html>' )
 
-    eq_( html_bytes((
+    eq_( dumps((
             span[ "before css files" ],
             Include( 'css_files' ),
             span[ "before css" ],
