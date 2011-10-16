@@ -22,10 +22,10 @@ def test_html():
     eq_( Page( 'An Example', encoding='UTF-8', lang='en',
             content=[
                 p[ 'Stuff ', a( 'some-link', href='#!' )[ 'more stuff' ] ],
-                form( (u'target', u'_blank'), (u'action', u'#!'), (u'method', u'GET'),
+                form( target='_blank', action='#!', method='GET',
                       onsubmit='func_with_esc_args(1, "b&ar")' )[
-                    input( (u'type', u'text'), name='stuff' ),
-                    input( (u'type', u'submit'), value='Click me' )],
+                    input( type='text', name='stuff' ),
+                    input( type='submit', value='Click me' )],
                 'Ze unicode: ', '你好', u'你好', br,
                 'Escaped: ', '<', u'> &',
                 safe_unicode( u'<b>Hello, world!!</b>' ),
@@ -37,9 +37,9 @@ def test_html():
          'content="text/html;charset=UTF-8"><title>An Example</title>'
          '<style type="text/css"></style></head><body>'
          '<p>Stuff <a class="some-link" href="#!">more stuff</a></p>'
-         '<form target="_blank" action="#!" method="GET" '
-         'onsubmit="func_with_esc_args(1, &quot;b&amp;ar&quot;)">'
-         '<input type="text" name="stuff"><input type="submit" value="Click me"></form>'
+         '<form action="#!" method="GET" '
+         'onsubmit="func_with_esc_args(1, &quot;b&amp;ar&quot;)" target="_blank">'
+         '<input name="stuff" type="text"><input type="submit" value="Click me"></form>'
          'Ze unicode: 你好你好<br>Escaped: &lt;&gt; &amp;<b>Hello, world!!</b>'
          '<script type="text/javascript">var x = 1 < 2, y = "&";</script>'
          '<style type="text/css">body:after { content: \'&\'; }</style>'
@@ -63,19 +63,19 @@ def test_html():
             safe_unicode( u'<script type="text/javascript">' ),
             Include( 'js' ),
             safe_unicode( u'</script>' )), 'UTF-8'),
-        '<span>before css files</span><link rel="stylesheet" type="text/css" '
-        'href="/path/to/css.css"><link rel="stylesheet" type="text/css" '
-        'href="/path/to/other.css"><span>before css</span><style type="text/css">'
+        '<span>before css files</span><link href="/path/to/css.css" rel="stylesheet"'
+        ' type="text/css"><link href="/path/to/other.css" rel="stylesheet"'
+        ' type="text/css"><span>before css</span><style type="text/css">'
         'body{ margin: 0; }</style><span>before js stuff</span><script '
-        'type="text/javascript" src="/path/to/js.js"></script><script '
+        'src="/path/to/js.js" type="text/javascript"></script><script '
         'type="text/javascript">var x = "foo";</script>' )
 
     eq_( js_injection( 'garply', [
             span[ "Some content" ],
             CSSFile( '/some/stylesheet.css' ),
             ScriptResource( 'var x = "bar";' )], 'UTF-8'),
-        'garply={content:"<link rel=\\"stylesheet\\" type=\\"text/css\\" '
-        'href=\\"/some/stylesheet.css\\"><span>Some content</span>",init:'
+        'garply={content:"<link href=\\"/some/stylesheet.css\\" rel=\\"stylesheet\\"'
+        ' type=\\"text/css\\"><span>Some content</span>",init:'
         'function(){var x = "bar";}}' )
             
 

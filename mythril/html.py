@@ -165,7 +165,9 @@ def from_args( cls, args=(), kwargs={} ):
     for k, v in args:
         if k == u'class': v = cssid( v )
         yield cls( k, v )
-    for k, v in kwargs.iteritems():
+    # undocumented feature: we have no guaranteed order on dict items (and thus
+    # on kwargs). so we force an order with ``sorted``.
+    for k, v in sorted( kwargs.iteritems() ):
         if k.endswith( '_' ): k = k[ :-1 ]
         k = k.replace( '__', ':' ).replace( '_', '-' )
         if k == u'class': v = cssid( v )
@@ -207,7 +209,7 @@ class Element( customtuple ):
         """
         Element[ child1, child2, ... childN ]
         """
-        if not isinstance( arg, tuple ): arg = (arg,)
+        if not type( arg ) == tuple: arg = (arg,)
         return type( self )( self.attrs, arg )
 
     @classmethod
@@ -218,6 +220,8 @@ class Element( customtuple ):
         must be used to construct the tags of that type. If ``name`` is "article",
         for instance, a subtype named "ArticleType", and a builder instance named
         "article", would be added to the current type's module (e.g., `mythril.html`)
+
+        ``empty`` is for tags like ``input`` which require no closing tag.
 
         Please give the name in ``unicode``.
         """
@@ -362,8 +366,7 @@ class CSSFile( customtuple ):
 
     def __html__( self, wr ):
         wr.write( Resource( 'css_files', key=self.key,
-                            content=link( (u'rel', u'stylesheet'), 
-                                          (u'type', u'text/css'),
+                            content=link( rel=u'stylesheet', type=u'text/css',
                                           href=self.url )))
 
 class JSFile( customtuple ):
@@ -374,7 +377,7 @@ class JSFile( customtuple ):
 
     def __html__( self, wr ):
         wr.write( Resource( 'js_files', key=self.key,
-                            content=script( (u'type', u'text/javascript'), 
+                            content=script( type=u'text/javascript',
                                             src=self.url )))
 
 class StyleResource( customtuple ):

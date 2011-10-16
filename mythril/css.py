@@ -29,6 +29,7 @@ from numbers import Number
 from uuid import uuid4
 from operator import add
 import os
+from collections import Iterable
 
 import mythril.html
 from mythril.html import Element, Attribute as HtmlAttribute, cssid
@@ -90,6 +91,7 @@ class CssWriter( object ):
 
         self.selector = oldselector
         self.stack.pop()
+
         return self
 
 def dump( value, file, encoding=None ):
@@ -145,7 +147,7 @@ class CssType( customtuple ):
     # TODO: document all the built-in special properties
 
     def __new__( cls, selector, attrs, children ):
-        return tuple.__new__( cls, selector, attrs, children) )
+        return tuple.__new__( cls, (selector, attrs, children) )
 
     def __repr__( self ):
         return ('css(' + repr( self.selector ) +
@@ -163,7 +165,7 @@ class CssType( customtuple ):
         """
         return type( self )( 
             selector=cssid( selector ),
-            attrs=tuple( CssType.run_specials( 
+            attrs=tuple( special.run(
                             Attribute.from_args( attr_pairs, attrs ))),
             children=self.children )
 
@@ -171,24 +173,26 @@ class CssType( customtuple ):
         """
         css[ child1, ... childN ]
         """
-        if not isinstance( arg, tuple ): arg = (arg,)
+        if not type( arg ) == tuple: arg = (arg,)
         return type( self )( self.selector, self.attrs, arg )
 
     def __css__( self, writer ):
-        writer.write( (writer.selector, u'{') )
-        for i, attr in enumerate( self.attrs ):
+        for i, sel in enumerate(writer.selector):
             if i > 0: writer.write( u',' )
-            writer.write( attr )
+            writer.write( sel )
+        writer.write( u'{' )
+        for attr in self.attrs:
+            writer.write( attr ).write( u';' )
         writer.write( u'}' )
 
         for child in self.children:
             writer.write( child )
 
-css = CssType()
+css = CssType( selector='', attrs=(), children=() )
 
 class _CssSpecials( dict ):
     
-    def register( name=None ):
+    def register( self, name=None ):
         """ Decorator. Registers the function as a "special" css property by
         the name of the function or ``name`` if it is given. Whenever this
         property is used in ``css`` values, the tuple or single value it is
@@ -198,13 +202,18 @@ class _CssSpecials( dict ):
         Note: remember that ``css`` attribute names undergo "cssification", so the
         name given here is 'background_gradient', it will still be activated
         if an attribute called "background-gradient" is given. """
-        def dec( f ): self[ name or cssid( f ) ] = f; return f
+        def fix_attr_name( name ): 
+            if name.endswith( '_' ): name = name[:-1]
+            return name.replace( '_', '-' )
+        def dec( f ): self[ name or fix_attr_name( f.__name__ ) ] = f; return f
 
         # in case this is called without a name and without parens
-        if name and not isinstance( name, basestring ): return dec( name )
+        if name and not isinstance( name, basestring ): 
+            f = name; name = None
+            return dec( f )
         return dec
     
-    def run( attrs ):
+    def run( self, attrs ):
         """ Internal utility for expanding special attribute names """
         for a in attrs:
             if a.name in self:
@@ -219,7 +228,7 @@ def color( r, g, b, a=None ):
     """ Mostly internal helper method for formatting color channel values
     into strings """
     if a: return u'rgba(%s,%s,%s,%s)' % (r, g, b, a)
-    else: return u'rgb(%s,%s,%s)' % (r, g, b)
+    else: return u'#%.2x%.2x%.2x' % (r, g, b)
 
 @special.register
 def pos( x, y, rel='' ):
@@ -250,7 +259,7 @@ def border_radius( radius, desc=None ):
 @special.register
 def box_shadow( x, y, blur, spread, color, inset='' ):
     return ((u'box-shadow', (x, y, blur, spread, color, inset)),
-            (u'-webkit-box-shadow', (x, y, blur, spread, color, inset)))
+            (u'-webkit-box-shadow', (x, y, blur, spread, color, inset)),
             (u'-moz-box-shadow', (x, y, blur, spread, color, inset)))
     # NB: we don't do DXImageTransform effects like Shadow and DropShadow
     #   because they fuck with the rendering of the rest of the element
@@ -264,7 +273,7 @@ def background_gradient( frm, to, angle=None ):
     cfrom, cto = color( *frm ), color( *to )
     args = u'(' + origin + u',' + cfrom + u',' + cto + u')'
 
-    yield (u'background-color', bgcolor)
+    yield (u'background-color', color( *bgcolor ))
     # TODO: angle for old webkit-gradient syntax
     yield (u'background-image', 
            u'-webkit-gradient(linear, left top, left bottom, from(' +
