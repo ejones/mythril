@@ -227,7 +227,9 @@ special = _CssSpecials()
 def color( r, g, b, a=None ):
     """ Mostly internal helper method for formatting color channel values
     into strings """
-    if a: return u'rgba(%s,%s,%s,%s)' % (r, g, b, a)
+    if a: 
+        if not isinstance(a, float): a = a / 255.0
+        return u'rgba(%s,%s,%s,%.1f)' % (r, g, b, a)
     else: return u'#%.2x%.2x%.2x' % (r, g, b)
 
 @special.register
@@ -241,6 +243,14 @@ def pos( x, y, rel='' ):
 
 @special.register
 def size( w, h ): return ( (u'width', w), (u'height', h) )
+
+# REVIEW: technically, this would overwrite any existing IE filter property...
+#   this shouldn't be a problem since the rest are pretty useless anyway
+@special.register
+def opacity( val ):
+    return ((u'opacity', val),
+            (u'filter', u'alpha(opacity=%d)' % (val*100)),
+            (u'zoom', u'1'))
 
 @special.register
 def border_radius( radius, desc=None ):
@@ -282,6 +292,7 @@ def background_gradient( frm, to, angle=None ):
         yield (u'background-image', prov + u'linear-gradient' + args)
 
 # TODO: horizontal?
+# TODO: we will eventually need a general utility for specials that generate images
 @special.register
 def static_background_gradient( frm, to, height ):
     cpairs = zip( frm, to )
@@ -292,7 +303,7 @@ def static_background_gradient( frm, to, height ):
     data = sio.getvalue()
     
     fname = u'_%x.png' % uuid4().fields[5]
-    with open( os.path.join( resource_file_name, fname ), 'wb' ) as f: f.write( data )
+    with open( os.path.join( resource_file_path, fname ), 'wb' ) as f: f.write( data )
     
     return ((u'background', u'url(data:image/png;base64,' +
                 data.encode( 'base64' ) + u') 0 0 repeat-x'),

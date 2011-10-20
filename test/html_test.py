@@ -70,7 +70,7 @@ def test_html():
         'src="/path/to/js.js" type="text/javascript"></script><script '
         'type="text/javascript">var x = "foo";</script>' )
 
-    eq_( js_injection( 'garply', [
+    eq_( js_wrap_content( 'garply', [
             span[ "Some content" ],
             CSSFile( '/some/stylesheet.css' ),
             ScriptResource( 'var x = "bar";' )], 'UTF-8'),

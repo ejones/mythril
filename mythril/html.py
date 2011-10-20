@@ -404,11 +404,14 @@ class ScriptResource( customtuple ):
                             content=( safe_unicode( c ) if isinstance( c, unicode )
                                       else safe_bytes( c ) )))
 
-def js_injection( lvalue, content, encoding=None ):
-    """ Utility for injecting content into a running Page.  In JavaScript,
+def js_wrap_content( lvalue, content, encoding=None ):
+    """ Utility for wrapping your HTML, CSS, and JS in a JS object, which is
+    useful for, say, injecting content into a running Page.  In JavaScript,
     assigns an object of ``{ content: "<HTML string>", init: <JS function> }``
-    to ``lvalue``. Renders ``content`` and includes css & js resources, files
-    included. Custom `Resource` types would have to be `Include`d separately
+    to ``lvalue``. Renders ``content`` and includes css & js resources
+    (``content`` holds the HTML & CSS, ``init`` wraps all the JS fragments),
+    files included. Custom `Resource` types would have to be `Include`d
+    separately
     """
     encoding = encoding or default_encoding
     wr = HtmlWriter( encoding )
@@ -435,3 +438,47 @@ def js_injection( lvalue, content, encoding=None ):
          json.dumps( binject, encoding=encoding ).encode( encoding, 'strict' ),
          u',init:function(){'.encode( encoding, 'strict' ),
          js, u'}}'.encode( encoding, 'strict' )) )
+
+# For convenience, here is a definition of a js script loader (in unicode)
+# TODO: document. add to main module documentation?
+js_load_script_fn = u"""
+function loadScript(url, params, onload) {
+    if (typeof params == 'function') {
+        onload = params; params = void 0;
+    }
+    var script = document.createElement('script'),
+        head = document.head || document.getElementsByTagName('head')[0],
+        hasOwnProp = Object.prototype.hasOwnProperty,
+        k, firstParam = url.indexOf('?') == -1,
+        done = false;
+
+    if (params) for (k in params) if (hasOwnProp.call(params, k)) {
+        if (firstParam) { url += '?'; firstParam = false; }
+        else url += '&';
+        url += encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+    }
+    
+    function finish(aborted) {
+        script.parentNode.removeChild(script);
+        if (!aborted && onload) onload.call(script);
+        onload = script = void 0;
+    }
+
+    script.type = 'text/javascript;
+    script.onload = script.onreadystatechange = function(e, aborted) {
+        if (done) return;
+
+        if (aborted || !this.readyState || this.readyState == 'complete') 
+            finish(aborted);
+        else if (this.readyState == 'interactive' || this.readyState == 'loaded')
+            setTimeout(function() { finish(aborted); }, 0);
+        else return;
+
+        e = void 0;
+        done = true;
+    };
+    script.src = url;
+    head.appendChild(script);
+    head = void 0; // IE mem leaks
+};
+"""
