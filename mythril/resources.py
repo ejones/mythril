@@ -21,6 +21,7 @@ from os.path import normpath
 from tempfile import mkdtemp
 from shutil import copytree, rmtree
 from hashlib import md5
+import atexit
 
 _fp = mkdtemp()
 def get_file_path():
@@ -37,6 +38,9 @@ def change_file_path(dst):
     copytree(_fp, dst)
     rmtree(_fp, ignore_errors=True)
     _fp = dst
+
+# try to cleanup all our temp files
+atexit.register(lambda: rmtree(get_file_path(), ignore_errors=True))
 
 _up = '/resources'
 def get_url_path():
