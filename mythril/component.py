@@ -3,25 +3,33 @@ Defines the `Component` (base) class, which you can can use to create "View
 classes" - logical units of HTML and CSS. It also automates linking up a
 JavaScript class to manage the behaviour of the HTML elements it defines, and
 linking up RPC methods between the Python and JavaScript sides of the class.
+
+For now, everything is in UTF-8
 """
 # TODO: document all the customization points / low-level details *urgh*
 # TODO: need examples
 
 from uuid import uuid4
 from hashlib import md5
+from os import path
 
-from mythril import css
+import mythril.css
 
 # A kind of "forward define"
 Component = None
 
 class ComponentMeta(type):
     def __init__(cls, name, bases, attrs):
-        cls.js_class = name
-        
-        comcls = Component or cls
-        cssfrag = css.dumps(cls.css) if cls.css else ''
-        comcls.css_md5.update(cssfrag)
+        if Component:
+            cls.js_class = name
+
+            cssfrag = mythril.css.dumps(cls.css) if cls.css else ''
+            if cssfrag:
+                oldhash = Component.css_md5.digest()
+                Component.css_md5.update(cssfrag)
+                filebase = path.join(mythril.css.resource_file_path, 'component_')
+
+
 
 
 
@@ -66,6 +74,7 @@ class Component(object):
     __metaclass__ = ComponentMeta
     css = None
     css_md5 = md5()
+    js_class = ''
 
     def __init__(self, *args, **kwargs):
         self.id = u'_' + uuid4().hex

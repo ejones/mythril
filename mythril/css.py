@@ -30,17 +30,14 @@ from uuid import uuid4
 from operator import add
 import os
 from collections import Iterable
+import re
 
 import mythril.html
+from mythril import resources
 from mythril.html import Element, Attribute as HtmlAttribute, cssid
-from mythril.protocol import protocol
 from mythril.util import customtuple
 
 default_encoding = mythril.html.default_encoding
-
-# used by special and CssType
-resource_url_path = u'/cssres'
-resource_file_path = os.path.join( u'data', u'cssres' )
 
 class CssWriter( object ):
     """ Writes arbitrary Python values to CSS. For advanced use. See
@@ -139,10 +136,10 @@ class CssType( customtuple ):
     added by CSS-name (i.e., "background-gradient", not "background_gradient").
 
     Some special properties statically generating images, eg. gradients and
-    corners for speed and for downlevel browsers. The host application should
-    configure ``resource_url_path`` and ``resource_file_path``
-    if it plans to use them. Data URIs are used where the size is small.  For
-    IE6/7, these properties always use images.
+    corners for speed and for downlevel browsers. Any generated files are
+    hosted with `mythril.resources`, so see that if you plan to use them. Data
+    URIs are used where the size is small.  For IE6/7, these properties always
+    use images.
     """
     # TODO: document all the built-in special properties
 
@@ -302,11 +299,15 @@ def static_background_gradient( frm, to, height ):
     sio = StringIO(); im.save( sio, 'PNG' )
     data = sio.getvalue()
     
-    fname = u'_%x.png' % uuid4().fields[5]
-    with open( os.path.join( resource_file_path, fname ), 'wb' ) as f: f.write( data )
+    def fescape_tuple(t): return re.sub('[(, )]', '_', repr(t))
+
+    # generate a filename that can be cached
+    fname = u'static-background-gradient-%s-%s-%d.png' % (
+                fescape_tuple(frm), fescape_tuple(to), height)
+    resources.put_string(fname, data)
     
     return ((u'background', u'url(data:image/png;base64,' +
                 data.encode( 'base64' ) + u') 0 0 repeat-x'),
             (u'*background', u'url(' + 
-                resource_url_path + u'/' + fname + u') 0 0 repeat-x'))
+                resources.get_url(fname).decode('ascii') + u') 0 0 repeat-x'))
 

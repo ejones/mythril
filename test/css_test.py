@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-from os import mkdir, path
+import os
+from os import path
 from os.path import dirname
-from shutil import rmtree
-from uuid import uuid4
 import Image
 from itertools import imap
 from operator import eq
@@ -10,16 +9,12 @@ import re
 from cStringIO import StringIO
 from nose.tools import *
 
+from mythril import resources
 import mythril.css
 from mythril.css import *
 
 class MyClass: pass
 class SomeUtility: pass
-
-def setup():
-    tmpdir = path.join( dirname(__file__), '_%x' % uuid4().fields[5] )
-    mkdir( tmpdir )
-    mythril.css.resource_file_path = tmpdir
 
 def test_css():
     eq_( dumps(
@@ -98,34 +93,37 @@ def test_special():
         return ((u'a',arg), (u'b',arg), (u'c',arg))
     speq( '-testy-test', 5, ((u'a',5), (u'b',5), (u'c',5)) )
 
-def test_resource_generators():
-    
-    def pngeq( file1, file2 ):
-        im1, im2 = Image.open(file1), Image.open(file2)
-        assert all(imap(eq, im1.getdata(), im2.getdata())), \
-              'Images were not equal: %r, %r' % (file1, file2)
+def pngeq( file1, file2 ):
+    im1, im2 = Image.open(file1), Image.open(file2)
+    assert all(imap(eq, im1.getdata(), im2.getdata())), \
+          'Images were not equal: %r, %r' % (file1, file2)
+
+__bkgd_grad_img = None
+def setup_static_bkgd_grad(): pass
+def teardown_static_bkgd_grad(): os.remove(__bkgd_grad_img)
+
+@with_setup(setup_static_bkgd_grad, teardown_static_bkgd_grad)
+def test_static_background_gradient():
+    global __bkgd_grad_img
 
     inlattr, fattr = css('', 
         static_background_gradient=((255,34,128), (23,69,128), 50)).attrs
+
     eq_(inlattr.name, 'background')
     eq_(fattr.name, '*background')
     
-    bkgd_grad_test_image = path.join(dirname(__file__), 
+    test_image = path.join(dirname(__file__), 
                                      'static_background_gradient_test_image.png')
 
     m = re.match(r'^url\(data:image/png;base64,([^)]+)\) 0 0 repeat-x$', 
                  inlattr.value)
     assert m, 'Incorrect format of inline image attribute: ' + repr(inlattr.value)
-    pngeq(StringIO(m.group(1).decode('base64')), bkgd_grad_test_image)
+    pngeq(StringIO(m.group(1).decode('base64')), test_image)
 
-    m = re.match(r'^url\((/[^/]+)/([^)]+)\) 0 0 repeat-x$', fattr.value)
+    m = re.match(r'^url\((/.+)/([^)]+)\) 0 0 repeat-x$', fattr.value)
     assert m, 'Incorrect format of file image attribute: ' + repr(fattr.value)
-    assert m.group(1) == mythril.css.resource_url_path, \
+    assert m.group(1) == resources.get_url_path(), \
           'Bad image url: ' + repr(fattr.value)
-    pngeq(path.join(mythril.css.resource_file_path, m.group(2)),
-          bkgd_grad_test_image)
-    
+    __bkgd_grad_img = gen_image = path.join(resources.get_file_path(), m.group(2))
 
-def teardown():
-    rmtree( mythril.css.resource_file_path )
-    mythril.css.resource_file_path = resource_file_path
+    pngeq(gen_image, test_image)
