@@ -9,6 +9,11 @@ Where necessary, MD5 hashes are embedded into the served names of resources. As
 such, Last-Modified and ETag headers are unneccsary and you can and should
 configure the server that serves your static files to use "aggressive caching"
 techniques like far-future Expires.
+
+NOTE: if you are serving your resources from a dedicated subdomain (as you should)
+you must set the url path (with `set_url_path`) to include the host and port. (eg.,
+"http://res.your-domain.com/resources"), so that script tags and such resolve
+correctly.
 """
 import os
 from os import path
@@ -38,8 +43,7 @@ def get_url_path():
     """ Returns the URL base path where consumers should expect to download the
     resource files managed here (for example, if you call 
     ``put_string('foo', 'bar')``, and ``get_url_path()`` gives ``'/resources'``,
-    a ``GET <Your Server>[/<Your Virt. Host>]/resources/foo`` should respond with
-    "bar".
+    a ``GET /resources/foo`` should respond with "bar".
 
     The returned string will be rooted but have no trailing slash. Defaults to
     "/resources".
@@ -52,6 +56,7 @@ def set_url_path(new_path):
     startup, since any existing resource links that have been sent out (think
     ``script`` and ``link`` tags) will be invalidated if the path is modified.
     """
+    global _up
     if new_path.endswith('/'): new_path = new_path[:-1]
     _up = new_path
 
