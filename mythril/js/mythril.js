@@ -1,164 +1,220 @@
-(function(mythril) {
-    var slice = Array.prototype.slice, 
-        hasOwnProperty = Object.prototype.hasOwnProperty,
-        noop = function(){},
+/* Mythril JS library. Requires JSON. */
+/*jslint indent: 4, nomen: true */
+/*global window, document, alert, setTimeout */
+(function (mythril) {
+    "use strict";
 
-        requestsIE: window.ActiveXObject ? void 0 : [], // of XMLHttpRequests
-        widgets: {}, // { id: Widget }
+    var widgets = {}, // { id: Widget }
 
         /** Copy the properties of props over to obj */
-        merge = function(obj, props) {
-            for (k in props) if (hasOwnProperty.call(props, k)) obj[k] = props[k];
+        update = function (obj, props) {
+            var k;
+            for (k in props) {
+                if (Object.prototype.hasOwnProperty.call(props, k)) {
+                    obj[k] = props[k];
+                }
+            }
         },
-        
+
         /** Adds an event listener for the named event. The "on" prefix must
         not be given */
-        addListener = function(obj, name, callback) {
-            if (obj.addEventListener) obj.addEventListener(name, callback);
-            else obj.attachEvent('on' + name, function() { 
+        addListener = function (obj, name, callback) {
+            if (obj.addEventListener) {
+                obj.addEventListener(name, callback);
+            } else {
+                obj.attachEvent('on' + name, function () {
                     callback.call(this, window.event);
-                 });
-        },
-
-        /** Turns an object into urlencoded params */
-        urlSerialize = function(obj) {
-            var fst = true, ret = '', k;
-            for (k in obj) if (hasOwnProperty.call(obj, k)) {
-                if (fst) fst = false; else ret += '&';
-                ret += encodeURIComponent(k) + '=' + encodeURIComponent(obj[k]);
+                });
             }
-            return ret;
         },
 
-        /** Turns a urlencoded string into a Prince */
-        urlUnserialize = function(str) {
-            var pairs = str.split('&'), i, kvp, ret = {};
-            for (i = 0; i < pairs.length; i++) {
-                kvp = pairs[i].split('=');
-                ret[decodeURIComponent(kvp[0])] = decodeURIComponent(kvp[1]);
-            }
-            return ret;
-        },
+        head = document.head || document.getElementsByTagName('head')[0];
 
-        SameDomainHost, CrossDomainHost; // for RPC
+    function Class() {}
 
     /** Binds the `this` of a function to a constant value */
-    if (!Function.prototype.bind) Function.prototype.bind = function( context ) {
-        var fn = this; return function() { fn.apply( context, arguments ); };
+    if (!Function.prototype.bind) {
+        Function.prototype.bind = function (context) {
+            var fn = this; return function () { fn.apply(context, arguments); };
+        };
     }
 
     /** Implements Class inheritance */
-    Function.prototype.extend = function( methods ) {
-        var parent = this, cctor = function() {}, k,
-        ctor = hasOwnProperty.call( methods, 'constructor' ) ? methods.constructor :
-            (methods.constructor = function() { parent.apply( this, arguments ); });
+    Function.prototype.extend = function (methods) {
+        var parent = this, Cctor = function () {},
+            ctor = Object.prototype.hasOwnProperty.call(methods, 'constructor') ?
+                    methods.constructor :
+                    (methods.constructor = function () {
+                        parent.apply(this, arguments);
+                    });
 
-        cctor.prototype = parent.prototype;
-        ctor.prototype = new cctor;
-        merge(ctor.prototype, methods);
+        Cctor.prototype = parent.prototype;
+        ctor.prototype = new Cctor();
+        update(ctor.prototype, methods);
         return ctor;
-    }
+    };
 
-    merge(mythril, {
+    update(mythril, {
         debug: false,
-        rpcToken: '', // prevents XSRF. should be set to some shared secret by the host
 
         /** If mythril.debug is true, sends a message to console, falling back on
         alerting. Remember to set mythril.debug to true in debug modes! */
-        log: function(/* args... */) {
-            if (!mythril.debug) return;
-            try { console.log.apply(console, arguments); }
-            catch (exn) { alert(Array.prototype.join.call(arguments)); }
+        log: function () {
+            if (!mythril.debug) { return; }
+            if (window.console) {
+                window.console.log.apply(window.console, arguments);
+            } else {
+                alert(Array.prototype.join.call(arguments));
+            }
         },
 
-        /** Same-domain HTTP POST implementation using XHRs. Takes a url and
-        the parameters, which will be serialized as POST variables, and a callback.
-        The "complete" callback should take the response text. The "error" callback
-        should take the status code and status text, which will both be -1 and an
-        empty string, respectively, in case of timeout or network error. An optional 
-        timeout, in milliseconds, defaults to 10000.
+        rpcToken: '', // prevents XSRF. Must set to a random string every page load
+        _callbacks: [], // for script RPC
 
-        Params are not optional. It must either be a x-www-form-urlencoded string or
-        an object, with values being primitive values (Strings and Numbers) */
-        post: function(url, params, timeout, complete, error) {
-            var xhr, xhrIdx, 
-                bodyText = typeof params == 'string' ? bodyText : urlSerialize(params);
-            
-            if (typeof timeout == 'function') { 
+        /** Cross-Domain HTTP GET messaging using script tags. Takes a url and
+        data (which will be serialized as JSON), and a success and error callback,
+        as well as an optional timeout which defaults to 10000.  "complete" should
+        take response data, "error" should take a status and status text, which
+        will be -1 and "" on timeout. The url must not have a query string.
+
+        In the GET query string parameters, the data is sent under the "data"
+        key, the globally accessible names for the complete and error callbacks
+        are sent under the "complete" and "error" keys respectively, and the
+        `mythril.rpcToken` as "rpcToken". In the event of an error, the server
+        *must* return a successful response which calls the error function
+        (with a status code and text). */
+        rpc: function (url, data, timeout, complete, error) {
+            if (typeof timeout === 'function') {
                 error = complete; complete = timeout; timeout = void 0;
             }
-            if (!timeout) timeout = 10000;
-    
-            try { xhr = new XMLHttpRequest(); } catch (_) {}
-            try { xhr = xhr || new ActiveXObject("Msxml2.XMLHTTP.6.0"); } catch (_) {}
-            try { xhr = xhr || new ActiveXObject("Msxml2.XMLHTTP.3.0"); } catch (_) {}
-            xhr = xhr || new ActiveXObject("Microsoft.XMLHTTP");
-            
-            xhr.open('POST', url, true);
-            if (requestsIE) xhrIdx = requestsIE.push(xhr);
+            if (timeout === void 0) { timeout = 10000; }
 
-            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-            xhr.setRequestHeader('Content-Length', bodyText.length);
-            xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-            xhr.setRequestHeader('X-RPC-Token', mythril.rpcToken);
-            xhr.send(bodyText);
+            var script = document.createElement('script'), cleanup,
 
-            function onComplete(_, aborted) {
-                var status = -1, statusText = '';
-                
-                if (!(aborted || xhr.readyState == 4)) return;
-                xhr.onreadystatechange = noop;
+                cidx = -1 + mythril._callbacks.push(function (data) {
+                    if (script) { if (complete) { complete(data); } cleanup(); }
+                }),
 
-                try { status = xhr.status; } catch (_) {}
-                try { statusText = xhr.statusText; } catch (_) {}
+                eidx = -1 + mythril._callbacks.push(function (status, text) {
+                    if (script) { if (error) { error(status, text); } cleanup(); }
+                });
 
-                if (Math.floor(status/100) == 2) complete(xhr.responseText);
-                else error(status, statusText);
-                
-                // cleanup for IE
-                if (requestsIE) requestsIE.splice(xhrIdx, 1);
-                xhr = complete = error = void 0;
+            cleanup = function () {
+                head.removeChild(script);
+                mythril._callbacks.splice(cidx, 2);
+                script = complete = error = void 0;
+            };
+
+            if (timeout !== null) {
+                setTimeout(function () {
+                    if (script) { if (error) { error(-1, ''); } cleanup(); }
+                }, timeout);
             }
 
-            if (xhr.readyState == 4) onComplete(); // completed synchronously
-            else {
-                xhr.onreadystatechange = onComplete;
-                setTimeout(function() { onComplete(0, true); }, timeout);
+            script.type = 'text/javascript';
+            script.src = url + '?data=' + encodeURIComponent(JSON.stringify(data)) +
+                '&complete=mythril._callbacks[' + cidx + ']' +
+                '&error=mythril._callbacks[' + eidx + ']' +
+                '&rpcToken=' + encodeURIComponent(mythril.rpcToken);
+            head.insertBefore(script, head.firstChild);
+        },
+
+        /** Create an instance of the given widget class and associate it with
+        the element with the given id. Takes as well a data object, host (RPC) URL,
+        and an object, "links", identifying the UIDs of other related widgets. The
+        element, data, url, and links object are passed to the widget constructor. */
+        create: function (WidgetClass, id, data, hostURL, links) {
+            var elem = document.all ? document.all[id] : document.getElementById(id),
+                existing = widgets[id];
+            if (hostURL.substring(hostURL.length - 1) === '/') {
+                hostURL = hostURL.substring(0, hostURL.length - 1);
             }
+            if (existing) { existing._destroy(); }
+            widgets[id] = new WidgetClass(elem, data, hostURL, links);
         },
 
+        /** General widget class. Manages behavior for HTML elements and in concert
+        with other widgets. It is intended to support seamless RPC with the server
+        as well as communication with other widgets; typically the server side 
+        library will generate sub-classes of `Widget` with auto-generated 
+        methods which invoke the RPC calls you've defined on the server or find
+        in the DOM the related widgets you've defined in the server-side generation
+        of the HTML. See the server-side code for more details.
 
-        /** Create an instance of the given widget class and associate it with 
-        the element with the given id and RPC host at "hostURL". The widget class 
-        is expected to take the hostURL, element and initialization data in the 
-        constructor. */
-        create: function(widgetClass, id, data, hostURL) {
-            elem = document.all ? document.all[id] : document.getElementById(id);
-            widgets[id] = new widgetClass(elem, data, hostURL);
-        },
+        Don't call the constructor directly, preferring to use `mythril.create`. See
+        the documentation there for constructing widgets */
+        Widget: Class.extend({
 
-        
+            constructor: function (elem, data, hostURL, links) {
+                this.container = elem;
+                this.hostURL = hostURL;
+                this._links = links;
+                this.init(data);
+            },
+
+            // cleanup
+            _destroy: function () {
+                this.destroy();
+                this.container = void 0;
+            },
+
+            /** To be overridden. Receives the data passed in on creation. */
+            init: function () {},
+
+            /** To be overridden. Called whenever an RPC method errs, so that
+            you don't have to provide an error handler on every RPC method call.
+            Receives the method name, the data provided, the status code, 
+            and text */
+            onerror: function () {},
+
+            /** To be overridden. Called usually just before this Widget is
+            replaced on the page, esp. to allow you to sever any links to 
+            DOM objects to prevent GC cycles in IE */
+            destroy: function () {},
+
+            /** Listens for the event "name" in its container (or any of its
+            child elements etc. thanks to bubbling). Unlike regular DOM event
+            handlers, "callback", has `this` bound to the current `Widget`
+            instance, allowing for fun and profit */
+            listen: function (name, callback) {
+                addListener(this.container, name, callback.bind(this));
+            },
+
+            /** Internal. Used in generated properties which obtain related
+            widgets */
+            _getLink: function (name) { return widgets[this._links[name]]; },
+
+            /** Internal. Used in generated properties which obtain child
+            elements */
+            _getElem: function (name) {
+                return document.all ? document.all[this._links[name]] :
+                        document.getElementById(this._links[name]);
+            },
+
+            /** Internal. Used in generated properties which do RPC. */
+            _rpc: function (methodName, data, complete, error) {
+                var that = this;
+
+                function oncomplete(data) {
+                    if (that.container) { complete.call(that, data); }
+                }
+
+                function onerror(status, statusText) {
+                    if (that.container) {
+                        if (error) {
+                            error.call(that, status, statusText);
+                        } else {
+                            that.onerror(methodName, data, status, statusText);
+                        }
+                    }
+                }
+
+                mythril.rpc(this.hostURL + '/' + methodName, data,
+                            oncomplete, onerror);
+            }
+
+        })
+
     });
- 
-    // Cleans up lingering XHRs in IE
-    if (requestsIE) {
-        window.attachEvent('onunload', function() {
-            for (var i = 0; i < requestsIE.length; i++) {
-                requestsIE[i].onreadystatechange = noop;
-                requestsIE[i].abort();
-            }
-        });
-    }
-       
-    /** Implements an RPC Host for requests on the Same-Origin */
-    SameDomainHost = (function(){}).extend({
-        constructor: function(url) {
-            this.url = url;
-        },
 
-        send: function(params, oncomplete, onerror) {
-            mythril.post(this.url, params, oncomplete, onerror);
-        }
-    });
-
-})(window.mythril = {});
+}(window.mythril = {}));
