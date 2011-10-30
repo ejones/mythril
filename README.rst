@@ -1,7 +1,7 @@
 mythril
 =======
 
-``mythril`` is a library for building fine-grained widgets in HTML, CSS and JavaScript. It is independent of any web framework.
+``mythril`` is a WSGI-compatible library for building fine-grained widgets in HTML, CSS and JavaScript.
 
 Licensed under the MIT License. See the LICENCE file distributed with this code for more details.
 

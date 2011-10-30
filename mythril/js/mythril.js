@@ -6,16 +6,6 @@
 
     var widgets = {}, // { id: Widget }
 
-        /** Copy the properties of props over to obj */
-        update = function (obj, props) {
-            var k;
-            for (k in props) {
-                if (Object.prototype.hasOwnProperty.call(props, k)) {
-                    obj[k] = props[k];
-                }
-            }
-        },
-
         /** Adds an event listener for the named event. The "on" prefix must
         not be given */
         addListener = function (obj, name, callback) {
@@ -28,9 +18,18 @@
             }
         },
 
-        head = document.head || document.getElementsByTagName('head')[0];
+        head = document.head || document.getElementsByTagName('head')[0],
+        Class = function () {};
 
-    function Class() {}
+    /** Copy the properties of props over to obj */
+    mythril.update = function (obj, props) {
+        var k;
+        for (k in props) {
+            if (Object.prototype.hasOwnProperty.call(props, k)) {
+                obj[k] = props[k];
+            }
+        }
+    };
 
     /** Binds the `this` of a function to a constant value */
     if (!Function.prototype.bind) {
@@ -50,11 +49,11 @@
 
         Cctor.prototype = parent.prototype;
         ctor.prototype = new Cctor();
-        update(ctor.prototype, methods);
+        mythril.update(ctor.prototype, methods);
         return ctor;
     };
 
-    update(mythril, {
+    mythril.update(mythril, {
         debug: false,
 
         /** If mythril.debug is true, sends a message to console, falling back on
