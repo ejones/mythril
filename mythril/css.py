@@ -21,6 +21,7 @@ request.  Nonetheless, anything is doable.
 extend, special property names like "pos", "size". See `CssType` for
 documentation.
 """
+import sys
 import Image
 from cStringIO import StringIO
 from functools import partial
@@ -31,13 +32,12 @@ from operator import add
 import os
 from collections import Iterable
 import re
+import codecs
 
 import mythril.html
 from mythril import resources
 from mythril.html import Element, Attribute as HtmlAttribute, cssid
 from mythril.util import customtuple
-
-default_encoding = mythril.html.default_encoding
 
 class CssWriter( object ):
     """ Writes arbitrary Python values to CSS. For advanced use. See
@@ -46,16 +46,19 @@ class CssWriter( object ):
     conversion to CSS by implementing a ``__css__`` method that takes the
     `CssWriter` instance as a sole argument.
     
-    Before being written, all ``unicode`` instances are encoded using 
-    its ``encoding`` attribute. 
+    If ``encoding`` is provided, all ``str``s are decoded according to it;
+    otherwise, the system default is used. ``output_encoding`` specifies the
+    encoding of the output file. It defaults to "UTF-8" (if it is None, unicode
+    is written to the file, so it must be something that accepts unicode)
 
     Note: at the moment, input strings are not "validated" because data-driven
     CSS is pretty rare. If you plan on using user-submitted css rules/property
     values, be sure to validate them ... somehow.
     """
-    def __init__( self, file, encoding=None ):
-        self.encoding = encoding or default_encoding
-        self.file = file
+    def __init__(self, file, encoding=None, output_encoding='UTF-8'):
+        self.encoding = encoding or sys.getdefaultencoding()
+        self.file = file if not output_encoding \
+                    else codecs.getwriter(output_encoding)(file)
         self.stack = []
         self.selector = ('',)
 
@@ -73,42 +76,49 @@ class CssWriter( object ):
         if hasattr( value, '__css__' ): value.__css__( self )
 
         elif isinstance( value, basestring ):
-            self.file.write( value if isinstance( value, str ) else
-                             value.encode( self.encoding, 'strict' ) )
+            self.file.write(value if isinstance(value, unicode) else
+                            value.decode(self.encoding))
 
         elif isinstance( value, Number ):
-            self.file.write( (unicode( value ) + u'px').encode( self.encoding ) )
+            self.file.write(unicode(value) + u'px')
 
         elif isinstance( value, Iterable ):
             for item in value: self.write( item )
 
         elif isinstance( value, Callable ): self.write( value() )
 
-        else: self.write( unicode( value ).encode( self.encoding, 'strict' ) )
+        else: self.write(unicode(value))
 
         self.selector = oldselector
         self.stack.pop()
 
         return self
 
-def dump( value, file, encoding=None ):
+def dump(value, file, encoding=None, output_encoding='UTF-8'):
     """ Writes the CSS byte representation of ``value`` to ``file``.
 
-    Before being written, all ``unicode`` instances are encoded using 
-    its ``encoding`` attribute. 
+    Any ``str``s are decoded using ``encoding`` if provided, the system default
+    otherwise. The output to the file is encoded using ``output_encoding``, which
+    defaults to UTF-8 (if it is None, unicode is written to the file, so it must
+    be something that accepts unicode).
 
     Note: at the moment, input strings are not "validated" because data-driven
     CSS is pretty rare. If you plan on using user-submitted css rules/property
     values, be sure to validate them ... somehow.
     """
-    CssWriter( file, encoding or default_encoding ).write( value )
+    CssWriter(file, encoding, output_encoding).write(value)
 
-def dumps( value, encoding=None ):
-    """ Returns the CSS byte representation of ``value``. See `dump` for
-    details. """
-    encoding = encoding or default_encoding
-    s = StringIO(); CssWriter( s, encoding ).write( value )
-    return s.getvalue()
+class _DumpsFile:
+    def __init__(self): self.text = []
+    def write(self, text): self.text.append(text)
+    def flush(self): pass
+    def tell(self): return sum(imap(len, self.text))
+
+def dumps(value, encoding=None):
+    """ Returns the CSS representation of ``value``. As a unicode string. 
+    See `dump` for details. """
+    s = _DumpsFile(); dump(value, s, encoding, None)
+    return u''.join(s.text)
     
 class Attribute( HtmlAttribute ):
     __slots__ = ()
