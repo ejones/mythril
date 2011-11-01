@@ -52,13 +52,13 @@ def test_html():
             safe_unicode( u'<style type="text/css">' ),
             Include( 'css' ),
             safe_unicode( u'</style>' ),
-            StyleResource( 'body{ margin: 0; }' ),
+            InlineStyle( 'body{ margin: 0; }' ),
             CSSFile( '/path/to/css.css', 'css.css' ),
             JSFile( '/path/to/js.js' ),
             CSSFile( '/path/to/other.css' ),
             span[ "before js stuff" ],
             CSSFile( '/repeated/resource', 'css.css' ),
-            ScriptResource( 'var x = "foo";' ),
+            InlineScript( 'var x = "foo";' ),
             Include( 'js_files' ),
             safe_unicode( u'<script type="text/javascript">' ),
             Include( 'js' ),
@@ -74,7 +74,7 @@ def test_html():
     eq_( js_wrap_content( 'garply', [
             span[ "Some content" ],
             CSSFile( '/some/stylesheet.css' ),
-            ScriptResource( 'var x = "bar";' )] ),
+            InlineScript( 'var x = "bar";' )] ),
         u'garply={content:"<link href=\\"/some/stylesheet.css\\" '
         u'rel=\\"stylesheet\\" type=\\"text/css\\"><span>Some content</span>",init:'
         u'function(){var x = "bar";}}' )

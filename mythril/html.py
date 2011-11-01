@@ -205,15 +205,16 @@ class Element( customtuple ):
         
         if len( attr_pairs ) > 0 and isinstance( attr_pairs[ 0 ], basestring ):
             attr_pairs = ((u'class', attr_pairs[ 0 ]),) + attr_pairs[ 1: ]
-        return type( self )( tuple( Attribute.from_args( attr_pairs, attrs ) ), 
+        return type( self )( list( Attribute.from_args( attr_pairs, attrs ) ), 
                              self.children )
                                  
     def __getitem__( self, arg ):
         """
         Element[ child1, child2, ... childN ]
         """
-        if not type( arg ) == tuple: arg = (arg,)
-        return type( self )( self.attrs, arg )
+        if not type( arg ) == tuple: children = [arg]
+        else: children = list(arg)
+        return type( self )( self.attrs, children )
 
     @classmethod
     def register( cls, name, empty=False ):
@@ -232,7 +233,7 @@ class Element( customtuple ):
         etype_name = name.title() + 'Type'
         etype = type(cls)(str(etype_name), (cls,), {'name': name, 'empty': empty})
         setattr( mod, etype_name, etype )
-        setattr( mod, name, etype( attrs=(), children=() ) )
+        setattr( mod, name, etype( attrs=[], children=[] ) )
 
     def __html__( self, wr ):
         wr.write( (safe_unicode( u'<' ), self.name, 
@@ -373,7 +374,7 @@ class JSFile( customtuple ):
                             content=script( type=u'text/javascript',
                                             src=self.url )))
 
-class StyleResource( customtuple ):
+class InlineStyle( customtuple ):
     """ A `Resource` for inline CSS rules. The ``<style>`` tag is added
     automatically. Resource section name is 'css' """
     def __new__( cls, content, key=None ):
@@ -383,7 +384,7 @@ class StyleResource( customtuple ):
         wr.write(Resource('css', key=self.key, content=_as_safe(self.content)))
 
 
-class ScriptResource( customtuple ):
+class InlineScript( customtuple ):
     """ A `Resource` for inline JS code. The ``<script>`` tag is added
     automatically. Resource section name is 'js' """
     def __new__( cls, content, key=None ):

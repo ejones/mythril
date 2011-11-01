@@ -122,10 +122,10 @@
         the element with the given id. Takes as well a data object, host (RPC) URL,
         and an object, "links", identifying the UIDs of other related widgets. The
         element, data, url, and links object are passed to the widget constructor. */
-        create: function (WidgetClass, id, data, hostURL, links) {
+        createWidget: function (WidgetClass, id, data, hostURL, links) {
             var elem = document.all ? document.all[id] : document.getElementById(id),
                 existing = widgets[id];
-            if (hostURL.substring(hostURL.length - 1) === '/') {
+            if (hostURL && hostURL.substring(hostURL.length - 1) === '/') {
                 hostURL = hostURL.substring(0, hostURL.length - 1);
             }
             if (existing) { existing._destroy(); }
@@ -140,8 +140,9 @@
         in the DOM the related widgets you've defined in the server-side generation
         of the HTML. See the server-side code for more details.
 
-        Don't call the constructor directly, preferring to use `mythril.create`. See
-        the documentation there for constructing widgets */
+        Don't call the constructor directly, preferring to use
+        `mythril.createWidget`. See the documentation there for constructing
+        widgets */
         Widget: Class.extend({
 
             constructor: function (elem, data, hostURL, links) {

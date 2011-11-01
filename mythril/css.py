@@ -172,7 +172,7 @@ class CssType( customtuple ):
         """
         return type( self )( 
             selector=cssid( selector ),
-            attrs=tuple( special.run(
+            attrs=list( special.run(
                             Attribute.from_args( attr_pairs, attrs ))),
             children=self.children )
 
@@ -180,7 +180,8 @@ class CssType( customtuple ):
         """
         css[ child1, ... childN ]
         """
-        if not type( arg ) == tuple: arg = (arg,)
+        if not type( arg ) == tuple: children = [arg]
+        else: children = list(arg)
         return type( self )( self.selector, self.attrs, arg )
 
     def __css__( self, writer ):
